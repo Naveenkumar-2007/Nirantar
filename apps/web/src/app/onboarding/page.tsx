@@ -4,9 +4,9 @@ import { BusinessForm } from "./form";
 
 type Me = { sub: string; email: string | null; name: string | null; businesses: { tenant_id: string; name: string }[] };
 
-export default async function OnboardingPage() {
+export default async function OnboardingPage({ searchParams }: { searchParams: Promise<{ new?: string }> }) {
   const me = await api<Me>("/v1/me");
-  if (me.businesses.length > 0) redirect("/");
+  if (me.businesses.length > 0 && (await searchParams).new !== "1") redirect("/");
   return (
     <div className="grid min-h-screen place-items-center px-4">
       <div className="w-full max-w-md">

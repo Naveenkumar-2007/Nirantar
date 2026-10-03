@@ -118,6 +118,7 @@ Code + schema + tests (incl. failure path) + observability hook + docs/ADR where
 - People sign in with OIDC (Keycloak, realm in infra/keycloak). The API verifies tokens locally; ROLES come from
   core.user_memberships, never from token claims. API keys remain for services.
 - Dashboard sessions are encrypted cookies; tokens never reach browser JS. Refresh happens in src/proxy.ts.
+- Merchant credentials go in core.tenant_secrets via security.vault (`tenant:` refs); never in .env or plain columns.
 
 ## Running the product locally
 
@@ -152,5 +153,7 @@ a2a-sdk, partner keys, two skills through the gateway); approvals execute with t
 P6 WhatsApp Cloud API (24 h window + approved templates, signed webhooks, inbound routing, Sarvam voice notes both
 ways, STOP, statuses) — ADR-0017; SMS on hold, phone calls deferred.
 P8 step 1: sign-in (Keycloak OIDC, encrypted sessions, memberships, self-onboarding) — ADR-0018.
+P8.2 self-serve onboarding: merchant secrets encrypted per tenant, verified Razorpay connect, setup wizard,
+history import via OnboardingWorkflow, team invites (verified email only), business switcher — ADR-0019.
 Next: P8 platform (OIDC, onboarding UI, billing,
 self-host packaging, CI).

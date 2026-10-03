@@ -30,7 +30,7 @@ def provider_sources(engine: Engine, tenant_id: str) -> list[BackfillSource]:
     with tenant_tx(tenant_id, engine) as c:
         accounts = c.execute(text("SELECT provider, secret_ref FROM core.provider_accounts WHERE tenant_id=:t "
                                   "AND provider IN ('razorpay')"), {"t": tenant_id}).all()
-    return [source_for_account(a.provider, a.secret_ref) for a in accounts]
+    return [source_for_account(a.provider, a.secret_ref, tenant_id, engine) for a in accounts]
 
 
 def _jsonable(v: Any) -> Any:

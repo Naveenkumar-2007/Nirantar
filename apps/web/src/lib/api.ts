@@ -48,6 +48,7 @@ export async function api<T>(path: string, init: { kind?: KeyKind; method?: stri
   if (res.status === 409 && !path.startsWith("/v1/me") && !path.startsWith("/v1/businesses")) {
     const d = await res.clone().json().catch(() => ({}));
     if (d?.detail?.code === "no_business") redirect("/onboarding");
+    if (d?.detail?.code === "choose_business") redirect("/choose-business");
   }
   if (!res.ok) {
     let detail: string = res.statusText;

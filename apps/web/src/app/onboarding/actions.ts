@@ -1,7 +1,7 @@
 "use server";
 
-import { redirect } from "next/navigation";
 import { api } from "@/lib/api";
+import { switchBusiness } from "@/lib/business-actions";
 
 export type CreateResult = { ok: boolean; message: string };
 
@@ -13,10 +13,15 @@ export async function createBusiness(_: CreateResult | null, formData: FormData)
   const segment = String(formData.get("segment") ?? "subscription");
   if (name.length < 2 || name.length > 80) return { ok: false, message: "Business name must be 2–80 characters" };
   if (!SEGMENTS.includes(segment)) return { ok: false, message: "Choose what kind of business this is" };
+  let tenant: string;
   try {
-    await api<{ tenant_id: string }>("/v1/businesses", { method: "POST", body: { name, segment } });
+    tenant = (await api<{ tenant_id: string }>("/v1/businesses", { method: "POST", body: { name, segment } })).tenant_id;
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : "failed" };
   }
-  redirect("/");
+  const fd = new FormData();
+  fd.set("tenant_id", tenant);
+  fd.set("return_to", "/setup");
+  await switchBusiness(fd);              // act in the new business and continue with its setup
+  return { ok: true, message: "created" };
 }

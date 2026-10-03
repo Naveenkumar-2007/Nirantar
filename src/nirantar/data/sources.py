@@ -93,10 +93,12 @@ class MockSource:
         return iter(())
 
 
-def source_for_account(provider: str, secret_ref: str) -> BackfillSource:
+def source_for_account(provider: str, secret_ref: str, tenant_id: str | None = None,
+                       engine: Any = None) -> BackfillSource:
     """Build a source from a provider account. Razorpay secret_ref format: '<key_id ref>;<key_secret ref>',
     e.g. 'env:RAZORPAY_KEY_ID;env:RAZORPAY_KEY_SECRET' (OAuth access tokens replace this in P8)."""
     if provider == "razorpay":
         kid_ref, _, secret = secret_ref.partition(";")
-        return RazorpaySource(resolve_secret(kid_ref), resolve_secret(secret))
+        return RazorpaySource(resolve_secret(kid_ref, tenant_id=tenant_id, engine=engine),
+                              resolve_secret(secret, tenant_id=tenant_id, engine=engine))
     raise ValueError(f"no backfill source for provider {provider!r}")

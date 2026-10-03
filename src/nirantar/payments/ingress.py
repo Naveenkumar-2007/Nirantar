@@ -51,7 +51,7 @@ def ingest_webhook(engine: Engine, provider: PaymentProvider, tenant_id: str, he
     if account is None:
         return IngestResult(404, reason="unknown_account")  # don't reveal which part was wrong
     try:
-        secret = resolve_secret(account.webhook_secret_ref)
+        secret = resolve_secret(account.webhook_secret_ref, tenant_id=tenant_id, engine=engine)
     except SecretNotFound:
         return IngestResult(503, reason="webhook_secret_unavailable")  # provider will retry later
     if not provider.verify_webhook(headers, raw_body, secret):

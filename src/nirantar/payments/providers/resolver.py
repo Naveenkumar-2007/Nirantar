@@ -30,22 +30,24 @@ class ProviderNotConfigured(LookupError):
     pass
 
 
-def _pair(ref: str) -> tuple[str, str]:
+def _pair(ref: str, tenant_id: str | None, engine: Any) -> tuple[str, str]:
     a, _, b = ref.partition(";")
     if not a or not b:
         raise ProviderNotConfigured("secret_ref must be '<id ref>;<secret ref>'")
-    return resolve_secret(a), resolve_secret(b)
+    return (resolve_secret(a, tenant_id=tenant_id, engine=engine),
+            resolve_secret(b, tenant_id=tenant_id, engine=engine))
 
 
-def build_from_account(provider: str, secret_ref: str) -> PaymentProvider:
+def build_from_account(provider: str, secret_ref: str, tenant_id: str | None = None,
+                       engine: Any = None) -> PaymentProvider:
     if provider == "razorpay":
         from nirantar.payments.providers.razorpay import RazorpayProvider
 
-        return RazorpayProvider(*_pair(secret_ref))
+        return RazorpayProvider(*_pair(secret_ref, tenant_id, engine))
     if provider == "cashfree":
         from nirantar.payments.providers.cashfree import CashfreeProvider
 
-        cid, secret = _pair(secret_ref)
+        cid, secret = _pair(secret_ref, tenant_id, engine)
         return CashfreeProvider(cid, secret, sandbox=os.environ.get("NIRANTAR_ENV", "local") != "production")
     raise ProviderNotConfigured(f"provider {provider!r} cannot be built from configuration")
 
@@ -73,7 +75,7 @@ class ProviderResolver:
             hit = self._cache.get(key)
             if hit and time.monotonic() - hit[0] < CACHE_TTL_S:
                 return hit[1]
-        built = build_from_account(acct.provider, acct.secret_ref)
+        built = build_from_account(acct.provider, acct.secret_ref, tenant_id, self.engine)
         with self._lock:
             self._cache[key] = (time.monotonic(), built)
         return built

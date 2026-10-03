@@ -71,6 +71,16 @@ class BusinessIn(BaseModel):
                          pattern=r"^(subscription|saas|edtech|media|fitness|insurance|lending|other)$")
 
 
+class RazorpayKeysIn(BaseModel):
+    key_id: str = Field(min_length=10, max_length=64)
+    key_secret: str = Field(min_length=12, max_length=128)
+
+
+class InviteIn(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+    role: str
+
+
 class PartnerIn(BaseModel):
     name: str = Field(min_length=3, max_length=80)
 
@@ -338,6 +348,88 @@ def create_app(svc: Services | None = None) -> FastAPI:
             AuditChain(SqlAuditStore(c), FixedClock(now)).append(tenant, f"user:usr_{ident.sub}", "business.created",
                                                                  {"name": body.name, "segment": body.segment})
         return {"tenant_id": tenant, "name": body.name, "roles": ["owner"]}
+
+    # ------------------------------------------------------------ onboarding and team (P8.2, ADR-0019)
+    @app.get("/v1/onboarding")
+    def onboarding_state(p: Principal = Depends(require(Permission.READ)),
+                         s: Services = Depends(services)) -> dict[str, Any]:
+        from nirantar.onboarding.service import checklist
+
+        return checklist(s.engine, p.tenant_id)
+
+    @app.post("/v1/onboarding/razorpay")
+    def onboarding_razorpay(body: RazorpayKeysIn, p: Principal = Depends(require(Permission.TENANT_ADMIN)),
+                            s: Services = Depends(services)) -> dict[str, Any]:
+        """Connect the business's own Razorpay account. Keys are checked with Razorpay first, then stored encrypted;
+        they are never returned. The webhook secret in the answer is shown once."""
+        from nirantar.onboarding.service import OnboardingError, connect_razorpay
+
+        try:
+            out = connect_razorpay(s.engine, p.tenant_id, body.key_id, body.key_secret, _actor(p),
+                                   verify=s.extra.get("razorpay_verify"))
+        except OnboardingError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        s.extra.pop("resolver", None)                      # drop any cached provider for this process
+        with tenant_tx(p.tenant_id, s.engine) as c:
+            AuditChain(SqlAuditStore(c), FixedClock(datetime.now(UTC))).append(
+                p.tenant_id, _actor(p), "provider.connected", {"provider": "razorpay", "mode": out["mode"]})
+        return out
+
+    @app.post("/v1/onboarding/import")
+    async def onboarding_import(p: Principal = Depends(require(Permission.TENANT_ADMIN)),
+                                s: Services = Depends(services)) -> dict[str, Any]:
+        """Start (or re-run) the history import: OnboardingWorkflow on the always-on worker."""
+        import asyncio as _asyncio
+
+        from temporalio.client import Client
+        from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
+
+        from nirantar.onboarding.service import checklist, mark_import_started
+        from nirantar.workflows import TASK_QUEUE
+        from nirantar.workflows.platform import OnboardingInput, OnboardingWorkflow, onboarding_workflow_id
+
+        state = await _asyncio.to_thread(checklist, s.engine, p.tenant_id)
+        if state["steps"][1]["status"] != "done":
+            raise HTTPException(409, "connect your payment provider first")
+        client = s.extra.get("temporal")
+        if client is None:
+            client = s.extra["temporal"] = await Client.connect(os.environ.get("TEMPORAL_ADDRESS", "localhost:7233"))
+        handle = await client.start_workflow(
+            OnboardingWorkflow.run, OnboardingInput(p.tenant_id), id=onboarding_workflow_id(p.tenant_id),
+            task_queue=TASK_QUEUE, id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING)
+        await _asyncio.to_thread(mark_import_started, s.engine, p.tenant_id)
+        return {"workflow_id": handle.id, "status": "running"}
+
+    @app.get("/v1/team")
+    def team_list(p: Principal = Depends(require(Permission.READ)), s: Services = Depends(services)) -> dict[str, Any]:
+        from nirantar.onboarding.service import team
+
+        return team(s.engine, p.tenant_id)
+
+    @app.post("/v1/team/invites")
+    def team_invite(body: InviteIn, p: Principal = Depends(require(Permission.TENANT_ADMIN)),
+                    s: Services = Depends(services)) -> dict[str, Any]:
+        """Invite a person by email; they join when they sign in with that VERIFIED email."""
+        from nirantar.onboarding.service import OnboardingError, invite
+
+        try:
+            out = invite(s.engine, p.tenant_id, body.email, body.role, _actor(p))
+        except OnboardingError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        with tenant_tx(p.tenant_id, s.engine) as c:
+            AuditChain(SqlAuditStore(c), FixedClock(datetime.now(UTC))).append(
+                p.tenant_id, _actor(p), "team.invited", {"invite_id": out["invite_id"], "role": body.role})
+        return out
+
+    @app.delete("/v1/team/invites/{invite_id}")
+    def team_revoke_invite(invite_id: str, p: Principal = Depends(require(Permission.TENANT_ADMIN)),
+                           s: Services = Depends(services)) -> dict[str, Any]:
+        from nirantar.onboarding.service import revoke_invite
+
+        if not revoke_invite(s.engine, p.tenant_id, invite_id):
+            raise HTTPException(404, "no open invite with this id")
+        return {"invite_id": invite_id, "revoked": True}
 
     # ------------------------------------------------------------ WhatsApp webhook (P6, ADR-0017)
     @app.get("/webhooks/whatsapp")

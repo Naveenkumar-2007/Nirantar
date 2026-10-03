@@ -42,8 +42,10 @@ class PlatformActivities:
 
     def _set_onboarding(self, tenant_id: str, state: dict[str, Any]) -> None:
         with tenant_tx(tenant_id, self.d.engine) as c:
-            c.execute(text("UPDATE core.tenants SET settings = settings || CAST(:s AS jsonb) WHERE tenant_id=:t"),
-                      {"s": json.dumps({"onboarding": state}, default=str), "t": tenant_id})
+            # merge into settings.onboarding (other steps, e.g. payments verification, live there too)
+            c.execute(text("UPDATE core.tenants SET settings = jsonb_set(settings, '{onboarding}', "
+                           "COALESCE(settings->'onboarding', '{}'::jsonb) || CAST(:s AS jsonb)) WHERE tenant_id=:t"),
+                      {"s": json.dumps(state, default=str), "t": tenant_id})
 
     # ---------------------------------------------------------------- onboarding
     @activity.defn(name="onboarding_mark")

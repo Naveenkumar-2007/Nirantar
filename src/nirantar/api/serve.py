@@ -11,20 +11,9 @@ from sqlalchemy import create_engine
 
 from nirantar.api.app import create_app
 from nirantar.api.deps import Services
+from nirantar.core.dotenv import load_dotenv as _load_dotenv
 from nirantar.db.session import get_engine
 from nirantar.llm.gateway import LLMGateway
-
-
-def _load_dotenv() -> None:
-    from pathlib import Path
-
-    env = Path(__file__).resolve().parents[3] / ".env"
-    if env.exists():
-        for line in env.read_text(encoding="utf-8").splitlines():
-            if "=" in line and not line.lstrip().startswith("#"):
-                k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip())
-
 
 _load_dotenv()
 

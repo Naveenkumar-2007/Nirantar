@@ -83,7 +83,10 @@ def touch_user(engine: Engine, claims: dict[str, Any]) -> None:
 
 
 def identity(engine: Engine, claims: dict[str, Any]) -> Identity:
+    from nirantar.onboarding.service import claim_invites
+
     touch_user(engine, claims)
+    claim_invites(engine, claims["sub"], claims.get("email"), bool(claims.get("email_verified")))
     with engine.connect() as c:
         rows = c.execute(text("SELECT tenant_id, roles FROM core.user_memberships WHERE user_sub=:s AND "
                               "status='active' ORDER BY created_at"), {"s": claims["sub"]}).all()

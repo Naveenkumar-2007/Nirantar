@@ -18,7 +18,7 @@ from nirantar.security.oidc import add_membership
 
 
 def main(argv: list[str]) -> None:
-    from nirantar.api.serve import _load_dotenv
+    from nirantar.core.dotenv import load_dotenv as _load_dotenv
 
     _load_dotenv()
     engine = get_engine()

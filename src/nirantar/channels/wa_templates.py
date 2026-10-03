@@ -137,7 +137,7 @@ def check(wa: WhatsAppCloud) -> dict[str, Any]:
 def main(argv: list[str]) -> None:
     import json
 
-    from nirantar.api.serve import _load_dotenv
+    from nirantar.core.dotenv import load_dotenv as _load_dotenv
     from nirantar.db.session import get_engine
 
     _load_dotenv()
