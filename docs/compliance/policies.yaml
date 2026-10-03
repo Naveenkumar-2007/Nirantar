@@ -1,0 +1,639 @@
+# Nirantar regulatory knowledge base -- policy records
+# kb_version: 0.2.0
+# retrieved: 2026-09-28
+# jurisdiction: IN
+#
+# NOT LEGAL ADVICE. This is a research snapshot for engineering. No record may be described as
+# "compliant" until counsel has reviewed it (BB-§49).
+# Records marked unverified or partially_verified MUST NOT be hard-coded. The policy engine
+# loads them as configurable parameters carrying their policy_id, and tenants may only
+# tighten them, never loosen them.
+#
+# verification_status legend
+#   verified            rule text read on an official source (rbi.org.in HTML page, NPCI/TRAI PDF,
+#                       Gazette text) during this retrieval
+#   partially_verified  primary source located and partly read, or some elements come only from
+#                       secondary summaries (the unverified elements are named in `exceptions`)
+#   unverified          no primary text read in this retrieval
+#
+# Record schema (exact keys): policy_id, source, source_type, effective_date, jurisdiction,
+#   applicability, rule, exceptions, implementation, test_case, verification_status, retrieved
+#
+# Tooling notes
+# - The rbidocs.rbi.org.in PDFs are behind a CAPTCHA, so RBI text was read from the rbi.org.in HTML
+#   renderings of the same directions.
+# - npci.org.in /PDF/ paths returned "Access Denied". /uploads/ paths worked.
+# - meity.gov.in returned 403. The DPDP Rules Gazette text (G.S.R. 846(E)) was read from a
+#   third-party-hosted copy of the Gazette PDF and cross-checked against the PIB backgrounder.
+
+# =====================================================================
+# 1. RBI e-mandate framework (cards, PPI, UPI) -- consolidated 2026
+# =====================================================================
+- policy_id: IN-RBI-EMANDATE-SCOPE-001
+  source:
+    title: "RBI Directions - Digital Payments - E-mandate Framework, 2026 (RBI/DPSS/2026-27/396; CO.DPSS.POLC.No.S56/02.14.003/2026-27, 21 Apr 2026), paras 1-4, 11; RBI press release 2026-2027/116 (21 Apr 2026)"
+    url: "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx?id=13374"
+  source_type: primary
+  effective_date: "2026-04-21"
+  jurisdiction: IN
+  applicability: "All recurring debits on cards, PPIs and UPI (domestic and cross-border), for every tenant type. NACH/eNACH is NOT in scope (see IN-NPCI-NACH-SCOPE-001)."
+  rule: "The 2026 Framework consolidates the earlier e-mandate circulars and repeals them (para 11 lists eight circulars from 2019-2024). It applies to all payment system providers and participants processing recurring transactions on cards, PPI or UPI. Registering, modifying or withdrawing an e-mandate requires AFA. The issuer must specify the mandate's validity and allow the customer to modify or withdraw it at any time."
+  exceptions: "NACH is outside the Framework's stated scope. Nirantar is not a payment system participant, so these obligations sit with issuers, acquirers and PAs and reach Nirantar through contracts and PA API terms. The Framework has no provisions on debit-date shifting or retries."
+  implementation: "Rule-pack `rbi_emandate_2026` selected when `mandate.rail` in {CARD, PPI, UPI}. `mandate.rail` is mandatory on every mandate record. If rail is unknown, all debit actions return REQUIRE_MORE_INFORMATION."
+  test_case: "GIVEN a mandate with rail=NACH WHEN the Debit Strategist asks for rules THEN the engine returns pack npci_nach, not rbi_emandate_2026. GIVEN rail=null WHEN a debit is proposed THEN decision=REQUIRE_MORE_INFORMATION."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-RBI-EMANDATE-PREDEBIT-001
+  source:
+    title: "RBI Digital Payments - E-mandate Framework, 2026, para 6(a)-(b)"
+    url: "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx?id=13374"
+  source_type: primary
+  effective_date: "2026-04-21"
+  jurisdiction: IN
+  applicability: "Every recurring debit on a card/PPI/UPI e-mandate (subscriptions, SIPs, premiums, EMIs on UPI AutoPay or card)."
+  rule: "The issuer must send a pre-transaction notification at least 24 hours before the debit. It must state the merchant name, amount, debit date/time, mandate reference and reason for the debit."
+  exceptions: "Secondary summaries say FASTag and NCMC auto-replenishment are exempt (not relevant to Nirantar tenants). The issuer sends this notice. Nirantar's own reminders are extra and cannot replace it."
+  implementation: "DebitCycle workflow timer `predebit_notice_min_lead=24h`, config tied to this policy_id. Check `emandate.predebit_notice_lead_ok`: execution time >= provider-confirmed notice time + 24h. Changing the debit date/time or amount invalidates the notice, so a new notice and a new 24h timer are required. The notice id and timestamp are stored as dispute evidence (L6)."
+  test_case: "GIVEN a UPI AutoPay pre-debit notice confirmed at 2026-10-01T10:00+05:30 WHEN execution is scheduled for 2026-10-02T09:00+05:30 THEN DENY (23h lead). WHEN it is rescheduled to 2026-10-02T10:30+05:30 THEN ALLOW. WHEN the debit is moved to 2026-10-05 THEN the old notice is void and any execution before new_notice+24h is DENY."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-RBI-EMANDATE-AFA-001
+  source:
+    title: "RBI Digital Payments - E-mandate Framework, 2026, para 8(a)-(b)"
+    url: "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx?id=13374"
+  source_type: primary
+  effective_date: "2026-04-21"
+  jurisdiction: IN
+  applicability: "Subsequent recurring debits on card/PPI/UPI e-mandates."
+  rule: "Subsequent recurring transactions up to Rs 15,000 per transaction can be processed without AFA. For insurance premiums, mutual fund subscriptions and credit card bill payments the limit is Rs 1,00,000 per transaction. Any debit above the applicable limit needs AFA."
+  exceptions: "The Rs 1,00,000 limit applies only to those three categories. EMIs, subscriptions, SaaS and B2B retainers stay at Rs 15,000."
+  implementation: "Check `emandate.afa_threshold`: 100000 if tenant/mandate category in {INSURANCE_PREMIUM, MUTUAL_FUND_SUBSCRIPTION, CREDIT_CARD_BILL}, otherwise 15000 (INR, stored as integer paise). A debit above the threshold is DENY for silent auto-debit and gets an alternative plan (payment link/collect with AFA). Mandate Doctor raises 'AutoPay limit below bill' from this check."
+  test_case: "GIVEN a D2C subscription debit of Rs 15,001 WHEN auto-debit is planned THEN DENY with reason AFA_REQUIRED and alternative=payment_link. GIVEN an insurer premium of Rs 99,999 THEN ALLOW. GIVEN an NBFC EMI of Rs 20,000 on UPI AutoPay THEN DENY silent auto-debit."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-RBI-EMANDATE-OPTOUT-001
+  source:
+    title: "RBI Digital Payments - E-mandate Framework, 2026, paras 4(b)-(e), 6(c)"
+    url: "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx?id=13374"
+  source_type: primary
+  effective_date: "2026-04-21"
+  jurisdiction: IN
+  applicability: "All card/PPI/UPI e-mandates."
+  rule: "The customer can opt out of a specific transaction, or of the whole e-mandate, from the pre-debit notification (with AFA). The customer can modify or withdraw the mandate at any time. A variable mandate may carry a customer-set maximum, within the overall RBI cap."
+  exceptions: "None identified."
+  implementation: "Provider events `mandate.txn_opted_out`, `mandate.revoked` and `mandate.paused` are terminal for the affected debit. Check `emandate.no_debit_after_optout`: the same cycle gets no retry, re-presentation or instrument switch without fresh customer action. Check `emandate.within_customer_cap`: amount <= mandate.max_amount. Win-back may only send an informational re-authorisation link."
+  test_case: "GIVEN the customer opted out of the 2026-11-05 debit WHEN Failure Triage proposes a T+1 retry THEN DENY. WHEN Mandate Doctor proposes charging another card on file for that cycle THEN DENY. WHEN a re-authorisation link is proposed THEN REQUIRE_APPROVAL, subject to consent and contact checks."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-RBI-EMANDATE-POSTDEBIT-001
+  source:
+    title: "RBI Digital Payments - E-mandate Framework, 2026, para 7"
+    url: "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx?id=13374"
+  source_type: primary
+  effective_date: "2026-04-21"
+  jurisdiction: IN
+  applicability: "Every executed recurring debit on card/PPI/UPI."
+  rule: "After the debit, the issuer must send a post-transaction notification. It must state the merchant name, amount, date/time, transaction and mandate reference, reason, and grievance-redressal details."
+  exceptions: "The issuer sends this notice. Nirantar's success messages are additional."
+  implementation: "Verifier stores issuer/provider notice evidence when available (`evidence.post_debit_notice`). Template lint `comms.includes_grievance_contact` requires the tenant's grievance contact in Nirantar-originated debit confirmations."
+  test_case: "GIVEN a debit confirmation template without the tenant's grievance contact WHEN it is registered THEN the lint rejects it with this policy_id."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-RBI-EMANDATE-NOCHARGE-001
+  source:
+    title: "RBI Digital Payments - E-mandate Framework, 2026 (charges clause; reported by SCC Online 24 Apr 2026 and Mondaq)"
+    url: "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx?id=13374"
+  source_type: primary
+  effective_date: "2026-04-21"
+  jurisdiction: IN
+  applicability: "Customer-facing fees for the e-mandate facility."
+  rule: "Customers may not be charged for the e-mandate facility."
+  exceptions: "The clause number was not captured on the primary page. The rule is corroborated by two secondary summaries. It does not govern contractual loan penal charges, which are a separate RBI topic and were not reviewed."
+  implementation: "Offer/grid validator `fees.no_emandate_facility_charge` rejects any fee line tagged mandate-setup or mandate-usage."
+  test_case: "GIVEN a tenant fee grid with 'AutoPay setup fee Rs 49' WHEN it is published THEN the validator rejects it."
+  verification_status: partially_verified
+  retrieved: "2026-09-28"
+
+# =====================================================================
+# 2. NPCI UPI AutoPay
+# =====================================================================
+- policy_id: IN-NPCI-UPIAUTOPAY-EXEC-001
+  source:
+    title: "NPCI/UPI/OC-215/2025-26 and OC-215A - Guidelines on usage of UPI APIs (21 May 2025). Primary PDF blocked; content from Mondaq and CAalley summaries"
+    url: "https://www.npci.org.in/PDF/npci/upi/circular/2025/UPI-OC-No-215-A-FY-2025-26-Guidelines-on-usage-of-UPI-APIs.pdf"
+  source_type: secondary
+  effective_date: "2025-08-01"
+  jurisdiction: IN
+  applicability: "UPI AutoPay mandate executions initiated through the tenant's PA/Payee PSP."
+  rule: "The initiator must start AutoPay executions in non-peak hours. Peak hours are 10:00-13:00 and 17:00-21:30 IST. Each mandate execution (per sequence number) is limited to one original attempt plus up to three retries."
+  exceptions: "Automated retrieval of the NPCI PDF returned 'Access Denied'. The effective date and all values come from secondary sources. Confirm with each PA/PSP, which may enforce stricter limits."
+  implementation: "Scheduler guard `upi_autopay.nonpeak_window` (IST windows from config) and counter `upi_autopay.attempts_per_seq <= 4` in the DebitCycle workflow. The M3 retry-timing bandit only chooses among allowed slots and remaining attempts. LLMs never schedule debits."
+  test_case: "GIVEN a sequence with 1 original attempt and 3 failed retries WHEN M3 proposes a 5th attempt THEN DENY (ATTEMPTS_EXHAUSTED). GIVEN a proposed execution at 18:15 IST THEN DENY (PEAK_HOUR), and the planner offers the next non-peak slot that still satisfies the 24h pre-debit check."
+  verification_status: partially_verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-NPCI-UPIAUTOPAY-LIFECYCLE-001
+  source:
+    title: "NPCI/UPI/OC-223/2025-26 - Enhancement of UPI Autopay (7 Oct 2025)"
+    url: "https://www.npci.org.in/uploads/UPI_OC_No_223_FY_2025_26_Enhancement_of_UPI_Autopay_88b38535cb.pdf"
+  source_type: primary
+  effective_date: "2025-12-31"
+  jurisdiction: IN
+  applicability: "UPI AutoPay mandate lifecycle (view, port, revoke, pause, modify); merchants executing through Payee PSPs."
+  rule: "Payer PSPs and UPI apps must provide full lifecycle management (view, port, revoke, pause, modify). All payer-initiated AutoPay operations require UPI PIN. 'Port Mandate' must be strictly user-driven. No inducements may be used to solicit porting: no cashback, incentives, in-app notifications, banners, nudges or alerts. Porting is limited to once in a rolling 90 days. Payee PSPs must issue a unique Merchant Identifier Code (MIC), which is mandatory for purpose code 'AZ' mandates. Members had to go live by 31 Dec 2025, and existing mandates continue to work during the transition."
+  exceptions: "Dated 2025-10-07; the effective_date above is the go-live deadline. The ban on using 'view mandate' data for other purposes (1(iv)) binds payer PSPs/apps, not merchants."
+  implementation: "Comms/agent-output lint `upi_autopay.no_port_inducement`. mandate.status in {PAUSED, REVOKED} blocks debits. MIC is stored on the mandate record."
+  test_case: "GIVEN the WhatsApp copy 'Move your AutoPay to App X and get Rs 50 cashback' WHEN submitted THEN DENY. GIVEN mandate.status=PAUSED WHEN a debit is proposed THEN DENY."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+# =====================================================================
+# 3. NACH / eNACH and dishonour
+# =====================================================================
+- policy_id: IN-NPCI-NACH-SCOPE-001
+  source:
+    title: "NPCI NACH e-mandate FAQs and NACH circulars (e.g. Circular 240 on reject reason codes for e-mandate variants; Circular 274 on return codes)"
+    url: "https://www.npci.org.in/what-we-do/nach/faqs/emandate-api-variant"
+  source_type: primary
+  effective_date: UNVERIFIED
+  jurisdiction: IN
+  applicability: "NBFC/bank EMI debits via NACH/eNACH (API, net-banking, debit-card and Aadhaar variants) through a sponsor bank."
+  rule: "NACH debits follow NPCI NACH procedural guidelines and the sponsor-bank agreement. Presentation, return (bounce) processing and return reason codes are set by NPCI circulars. This retrieval did not verify presentation frequency, re-presentation limits or any NACH pre-debit-notice duty."
+  exceptions: "The NPCI pages render with JavaScript and could not be read. Do not carry the RBI e-mandate 24h / Rs 15,000 values over to NACH. Get the rules from the sponsor bank and record them per tenant."
+  implementation: "Rule-pack `npci_nach` built from tenant sponsor-bank parameters: `nach.max_presentations_per_cycle`, `nach.min_gap_between_presentations`, `nach.return_code_map`. If a parameter is missing, a re-presentation returns REQUIRE_MORE_INFORMATION. Failure Triage maps provider-reported NACH return codes to retryable or non-retryable."
+  test_case: "GIVEN an NBFC tenant without `nach.max_presentations_per_cycle` WHEN a NACH re-presentation is proposed THEN decision=REQUIRE_MORE_INFORMATION."
+  verification_status: unverified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-GOI-PSSA-S25-001
+  source:
+    title: "Payment and Settlement Systems Act, 2007, s.25 - Dishonour of electronic funds transfer for insufficiency etc. of funds"
+    url: "https://www.indiacode.nic.in/bitstream/123456789/2082/4/a2007-51.pdf"
+  source_type: primary
+  effective_date: UNVERIFIED
+  jurisdiction: IN
+  applicability: "EMI/NACH bounces for lending tenants; any legal-consequence language in collections."
+  rule: "A dishonoured electronic funds transfer can be an offence if it was initiated to discharge a debt and followed the system provider's procedural guidelines. NI Act Chapter XVII applies where the circumstances allow. The beneficiary must issue a written demand within the statutory notice period, reported as 30 days."
+  exceptions: "The statute URL was located but its text was not re-read. The summary comes from secondary sources. Section 25 commencement date not verified. Any legal action is the lender's decision."
+  implementation: "`collections.legal_notice` always returns REQUIRE_APPROVAL. The conduct judge blocks threats of arrest or prosecution and any misstatement of consequences. The bounce timestamp is stored so the tenant can track its notice window."
+  test_case: "GIVEN a bounced eNACH EMI WHEN the Collections Strategist proposes a s.25 demand notice THEN REQUIRE_APPROVAL. WHEN a voice script says 'you will be arrested today' THEN DENY."
+  verification_status: partially_verified
+  retrieved: "2026-09-28"
+
+# =====================================================================
+# 4. Card recurring / card-data storage
+# =====================================================================
+- policy_id: IN-RBI-CARD-DATASTORE-001
+  source:
+    title: "RBI (Regulation of Payment Aggregators) Directions, 2025 (15 Sep 2025), paras 9(a), 10(g), Annex 1.2.1; card recurring also governed by IN-RBI-EMANDATE-*"
+    url: "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx?id=12896"
+  source_type: primary
+  effective_date: "2025-09-15"
+  jurisdiction: IN
+  applicability: "Card recurring mandates for D2C/SaaS/OTT tenants; Nirantar as the merchant's technology vendor."
+  rule: "Customer card credentials may not be stored in any database or server that the merchant can access. PAs must ensure merchant infrastructure complies with PCI-DSS/PCI-SSF as applicable. Card recurring debits must also follow the e-mandate AFA, pre-debit and opt-out rules."
+  exceptions: "The paragraph text comes from an automated extraction of the rbi.org.in page. The separate RBI card-on-file tokenisation circulars (2021-22) were not re-read, so the fields merchants may keep (e.g. last 4 digits, issuer name) are UNVERIFIED."
+  implementation: "Schema guard `pci.no_pan_storage`: any Luhn-valid 12-19 digit sequence is redacted at ingestion and a `security.pan_detected` event is emitted. Only provider token ids, last4, network and expiry month/year are stored. 'Switch instrument' uses provider token references only."
+  test_case: "GIVEN a webhook with a Luhn-valid 16-digit number in a notes field WHEN it is persisted THEN the stored value is redacted and a `security.pan_detected` event exists."
+  verification_status: partially_verified
+  retrieved: "2026-09-28"
+
+# =====================================================================
+# 5. RBI Digital Lending Directions, 2025
+# =====================================================================
+- policy_id: IN-RBI-DLD-2025-RECOVERY-001
+  source:
+    title: "Reserve Bank of India (Digital Lending) Directions, 2025 (RBI/2025-26/36, DOR.STR.REC.19/21.07.001/2025-26, 8 May 2025), para 8(v)"
+    url: "https://www.rbi.org.in/scripts/NotificationUser.aspx?Id=12848&Mode=0"
+  source_type: primary
+  effective_date: "2025-05-08"
+  jurisdiction: IN
+  applicability: "Bank/NBFC digital-lending tenants; Nirantar when it acts as an LSP or as a recovery agent that approaches borrowers."
+  rule: "When an LSP or recovery agent is authorised to approach a borrower for recovery, the RE must send the agent's details to the borrower by email or SMS BEFORE the agent contacts the borrower. The RE must disclose on its website the LSPs/DLAs it uses and which of them act as recovery agents."
+  exceptions: "Most of the Directions took effect immediately. Para 6 took effect on 2025-11-01 and para 17 on 2025-06-15. The November 2025 RBI consolidation may have moved this text into RE-wise directions; confirm the current home of these paragraphs. Whether Nirantar is an LSP is a legal question."
+  implementation: "Tenant onboarding gate `lending.lsp_disclosure_confirmed`. Collections workflow precondition `collections.agent_details_sent` (provider-confirmed SMS/email delivery) before the first recovery contact of any kind."
+  test_case: "GIVEN a newly assigned delinquent account with no delivered agent-details SMS/email WHEN the first voice call is scheduled THEN DENY."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-RBI-DLD-2025-GRO-001
+  source:
+    title: "RBI (Digital Lending) Directions, 2025, para 11"
+    url: "https://www.rbi.org.in/scripts/NotificationUser.aspx?Id=12848&Mode=0"
+  source_type: primary
+  effective_date: "2025-05-08"
+  jurisdiction: IN
+  applicability: "Digital-lending tenants and their LSPs/DLAs."
+  rule: "The RE and its LSPs must designate nodal grievance redressal officers and display their contact details prominently on their websites and in the DLA. If the borrower gets no reply within 30 days of the RE receiving the complaint, the borrower can complain on the RBI CMS portal under RB-IOS (para 11(iv))."
+  exceptions: "None identified."
+  implementation: "Lending templates must render `tenant.gro_name` and `tenant.gro_contact` (check `lending.gro_in_comms`). A complaint intent detected by M8 transfers the conversation to a human, shares the GRO details and opens a grievance case with SLA timer `grievance.re_response_due=30d`."
+  test_case: "GIVEN a borrower says 'I want to complain' on a voice call WHEN the agent continues negotiating THEN the conduct judge flags a violation. Expected: transfer_to_human, GRO details shared, grievance case created with a 30-day timer."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-RBI-DLD-2025-DATA-001
+  source:
+    title: "RBI (Digital Lending) Directions, 2025, paras 12(i), 13(i), 13(iv)"
+    url: "https://www.rbi.org.in/scripts/NotificationUser.aspx?Id=12848&Mode=0"
+  source_type: primary
+  effective_date: "2025-05-08"
+  jurisdiction: IN
+  applicability: "Borrower data processed by Nirantar for lending tenants (features, transcripts, recordings, training data)."
+  rule: "Data collection must be need-based, with the borrower's prior and explicit consent and an audit trail. LSPs may not store borrower personal information beyond the basic minimal data needed for their operations. All data must be stored only on servers located in India."
+  exceptions: "If Nirantar is only the RE's processor and stores data in RE-controlled tenancy, the 'LSP minimal data' limit may apply differently. Needs legal review."
+  implementation: "Lending tenants get `data.residency=IN_ONLY` for every store, including backups, vector stores and LLM/STT processing. Per-purpose consent records carry an audit trail. Data-class allowlist `lending.lsp_minimal_fields`: any field outside the allowlist needs a tenant-signed justification."
+  test_case: "GIVEN a lending tenant WHEN a borrower transcript would go to an LLM endpoint outside India THEN DENY. GIVEN a feature pipeline adding 'contacts_list' THEN DENY (not need-based)."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-RBI-DLD-2025-REPAYMENT-001
+  source:
+    title: "RBI (Digital Lending) Directions, 2025, para 9(i)-(ii)"
+    url: "https://www.rbi.org.in/scripts/NotificationUser.aspx?Id=12848&Mode=0"
+  source_type: primary
+  effective_date: "2025-05-08"
+  jurisdiction: IN
+  applicability: "Payment links and collection flows Nirantar creates for lending tenants."
+  rule: "All loan servicing and repayment must be made by the borrower directly into the RE's bank account. No pass-through or pool account of any third party may be used."
+  exceptions: "None identified."
+  implementation: "Payment-link creation for lending tenants requires `beneficiary == tenant RE account` (provider sub-merchant id). Any Nirantar-owned or third-party pooled beneficiary is DENY."
+  test_case: "GIVEN an EMI payment link whose settlement target is not the RE's registered account WHEN created THEN DENY."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+# =====================================================================
+# 6. Recovery conduct
+# =====================================================================
+- policy_id: IN-RBI-RBC-RECOVERY-HOURS-001
+  source:
+    title: "Reserve Bank of India (Non-Banking Financial Companies - Responsible Business Conduct) Directions, 2025 (RBI/DOR/2025-26/362, 28 Nov 2025; page 'updated as on 1 Jul 2026'), para 100"
+    url: "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx?id=12942"
+  source_type: primary
+  effective_date: "2025-11-28"
+  jurisdiction: IN
+  applicability: "Recovery of overdue loans by NBFC tenants, their staff and agents, including Nirantar voice/WhatsApp when used for recovery. The equivalent RBC Directions for commercial banks, SFBs, UCBs, HFCs and others were not individually re-read."
+  rule: "The NBFC and its agents must not call the borrower before 8:00 a.m. or after 7:00 p.m. for recovery of overdue loans."
+  exceptions: "Microfinance loans have a narrower window (IN-RBI-RBC-RECOVERY-MFI-HOURS-001). The text says 'calling', but Nirantar applies the window to all recovery channels as a conservative choice."
+  implementation: "Contact Arbiter hard constraint `recovery.contact_window=[08:00,19:00)` in the borrower's local time (default Asia/Kolkata). Latest dial start is 18:50 (config) so calls end inside the window. Applies to voice, WhatsApp, SMS and scheduled callbacks for delinquent accounts."
+  test_case: "GIVEN an NBFC borrower at DPD 5 WHEN a call is scheduled at 07:45 IST THEN DENY. At 19:05 THEN DENY. At 10:00 THEN ALLOW, subject to other checks."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-RBI-RBC-RECOVERY-MFI-HOURS-001
+  source:
+    title: "RBI (NBFC - Responsible Business Conduct) Directions, 2025, microfinance recovery provisions (para 91 per page extraction)"
+    url: "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx?id=12942"
+  source_type: primary
+  effective_date: "2025-11-28"
+  jurisdiction: IN
+  applicability: "Microfinance loans."
+  rule: "For microfinance loans, borrowers must not be contacted for recovery before 9:00 a.m. or after 6:00 p.m."
+  exceptions: "The paragraph number and wording come from an automated extraction of the page. Confirm by manual reading."
+  implementation: "If `loan.product_class=MICROFINANCE`, then `recovery.contact_window=[09:00,18:00)`."
+  test_case: "GIVEN a microfinance loan WHEN a call is scheduled at 18:30 THEN DENY. The same slot for a personal loan THEN ALLOW."
+  verification_status: partially_verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-RBI-RBC-RECOVERY-CONDUCT-001
+  source:
+    title: "RBI (NBFC - Responsible Business Conduct) Directions, 2025, paras 92, 100"
+    url: "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx?id=12942"
+  source_type: primary
+  effective_date: "2025-11-28"
+  jurisdiction: IN
+  applicability: "All lending-recovery communications by the RE, its staff, agents and vendors."
+  rule: "The NBFC and its agents must not use intimidation or harassment of any kind, verbal or physical. Prohibited practices include threatening or anonymous calls, false and misleading representations, acts meant to publicly humiliate or intrude on privacy, harassing relatives, friends or co-workers, and inappropriate messages on mobile or social media. The NBFC must have a dedicated mechanism for recovery-related grievances and share its details at disbursal (para 92)."
+  exceptions: "The text bans HARASSING third parties; it does not ban every contact with them. Nirantar's default of never contacting third parties is a stricter product choice."
+  implementation: "The M12 conduct judge checks every utterance and template for threats, false consequences and shaming. `recovery.contact_party in {borrower, co_borrower, guarantor}`, otherwise DENY. When the wrong person answers, the call ends politely without mentioning the debt."
+  test_case: "GIVEN the callee says 'I am his brother' WHEN the agent is about to mention the overdue EMI THEN DENY. Expected: polite exit, `wrong_party` recorded, no further calls to that number until the tenant reviews."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-RBI-RBC-RECOVERY-AGENTINFO-001
+  source:
+    title: "RBI (NBFC - Responsible Business Conduct) Directions, 2025, para 95"
+    url: "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx?id=12942"
+  source_type: primary
+  effective_date: "2025-11-28"
+  jurisdiction: IN
+  applicability: "Lending tenants that assign recovery to Nirantar voice or to an agency via Nirantar handoff."
+  rule: "The NBFC must give the borrower the recovery agency's details when it starts recovery. The agent must carry the notice, the NBFC's authorisation letter and an identity card. See also IN-RBI-DLD-2025-RECOVERY-001, which requires the details BEFORE contact for digital loans."
+  exceptions: "There is no stated equivalent of the identity card for an AI voice agent. At minimum, identify the lender, the agent and the automated nature of the call at the start. Get a legal opinion."
+  implementation: "Precondition `collections.agent_details_sent`. The voice opening must state the lender, the agent and that the caller is an automated/AI assistant. The wording is tenant-configurable, but the disclosure cannot be switched off."
+  test_case: "GIVEN a voice call whose opening lacks the lender name WHEN the script version is published THEN the lint rejects it."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-RBI-RBC-RECOVERY-2026AMEND-001
+  source:
+    title: "RBI draft RE-wise Responsible Business Conduct Amendment Directions on 'Conduct of REs in recovery of loans and engagement of recovery agents' (press release 12 Feb 2026). Final directions reported issued 6 Aug 2026 (e.g. AIFI Third Amendment Directions RBI/2026-27/229), effective 1 Jan 2027 per secondary sources"
+    url: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=62215"
+  source_type: primary
+  effective_date: UNVERIFIED
+  jurisdiction: IN
+  applicability: "All REs (commercial banks, SFBs, LABs, RRBs, UCBs, RCBs, AIFIs, NBFCs, HFCs) and their recovery agents."
+  rule: "On 12 Feb 2026 RBI published drafts of comprehensive recovery-conduct instructions for all REs, covering fair treatment, conduct of staff and agents, due diligence, training and an agent code of conduct. Secondary reports say final directions were issued on 6 Aug 2026, effective 1 Jan 2027. They reportedly prohibit abusive language, threats, excessive or anonymous calls, contact outside prescribed hours, and harassment of borrowers, guarantors, relatives, friends or co-workers."
+  exceptions: "Only the February draft press release was read on rbi.org.in. The NBFC RBC page ('updated as on 1 Jul 2026') showed only one 2026 amendment (29 Apr 2026, calamity relief, para 105A), not the recovery rewrite. Some secondary sources give 1 Jul 2026 as the effective date and others 1 Jan 2027, so the date is UNVERIFIED. Call-frequency caps, logging/recording duties and device-lock rules in the final text are UNKNOWN."
+  implementation: "`recovery.max_attempts_per_day`, `recovery.max_attempts_per_week` and escalation rules are config tied to this policy_id, with conservative defaults (1 voice attempt/day, 3/week per borrower) until counsel confirms. Launch gate: production collections for a lending tenant is blocked while this record is not verified."
+  test_case: "GIVEN this record's status != verified WHEN a lending tenant is switched to production collections THEN the launch gate fails with POLICY_UNVERIFIED."
+  verification_status: partially_verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-RBI-RECOVERY-CALLRECORDING-001
+  source:
+    title: "RBI recovery-agent instructions (DBOD.No.Leg.BC.75/09.07.005/2007-08, 24 Apr 2008, referenced in Master Circular 1 Jul 2010) and NBFC RBC Directions 2025. No call-recording clause found in either extract"
+    url: "https://www.rbi.org.in/commonman/english/scripts/Notification.aspx?Id=787"
+  source_type: primary
+  effective_date: UNVERIFIED
+  jurisdiction: IN
+  applicability: "Voice collections: call recording and contact logging."
+  rule: "UNVERIFIED: whether RBI currently requires, or only recommends, recording of recovery calls. The NBFC RBC para 100 and NBFC outsourcing extracts had no recording or logging clause. The final 2026 recovery amendment may add one. Recordings are personal data under DPDP, and for digital loans they are borrower data under DLD 2025 paras 12-13."
+  exceptions: "Not established."
+  implementation: "Build for both outcomes. A contact log (who, when, channel, outcome, script version, policy_version) is always ON. Audio recording is ON only after a disclosure at the start of the call and a recorded lawful basis. Audio is stored encrypted, tenant-isolated and India-only, with the retention/erasure workflow from IN-GOI-DPDP-RETENTION-001."
+  test_case: "GIVEN a collections call WHEN it ends THEN a contact-log row exists even with recording off. GIVEN recording=on and no disclosure played THEN the call is flagged NON_CONFORMING and the audio is quarantined."
+  verification_status: unverified
+  retrieved: "2026-09-28"
+
+# =====================================================================
+# 7. Outsourcing (NBFC/bank tenants using Nirantar as vendor)
+# =====================================================================
+- policy_id: IN-RBI-OUTSOURCING-NBFC-001
+  source:
+    title: "Reserve Bank of India (Non-Banking Financial Companies - Managing Risks in Outsourcing) Directions, 2025 (RBI/DOR/2025-26/363, 28 Nov 2025), paras 9, 14, 17, 18(v)"
+    url: "https://rbi.org.in/scripts/BS_ViewMasDirections.aspx?id=12941"
+  source_type: primary
+  effective_date: "2025-11-28"
+  jurisdiction: IN
+  applicability: "NBFC tenants. Parallel directions dated 28 Nov 2025 exist for commercial banks, SFBs and LABs (not individually re-read)."
+  rule: "Outsourcing does not reduce the NBFC's obligations; ultimate responsibility stays with its Board and senior management (para 9). Material outsourcing is judged by its impact on operations, reputation, profitability or customer service (para 14). The NBFC is responsible for its recovery agents, DSAs and DMAs, including confidentiality (para 17). Service providers must apply the same standard of care the NBFC would (para 18(v))."
+  exceptions: "Existing IT outsourcing agreements have a transition period, reportedly to 10 Apr 2026. Whether a service counts as financial-services or IT outsourcing is the tenant's classification."
+  implementation: "Vendor due-diligence pack `outsourcing.vendor_dd_pack`. Tenant `policy_overrides` may only tighten regulatory floors, and loosening attempts are rejected."
+  test_case: "GIVEN an NBFC tenant override setting a 07:00-21:00 contact window WHEN saved THEN it is rejected. An override of 09:00-18:00 THEN is accepted."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-RBI-OUTSOURCING-NBFC-DATAISOLATION-001
+  source:
+    title: "NBFC - Managing Risks in Outsourcing Directions, 2025, paras 26, 27, 70"
+    url: "https://rbi.org.in/scripts/BS_ViewMasDirections.aspx?id=12941"
+  source_type: primary
+  effective_date: "2025-11-28"
+  jurisdiction: IN
+  applicability: "Multi-tenant processing of NBFC customer data by Nirantar, including ML training and analytics."
+  rule: "When a service provider works for several entities, the NBFC must ensure strong safeguards so there is no comingling or combining of information, documents, records or assets (para 26). The provider must be able to isolate and clearly identify the NBFC's customer information (para 27). In multi-tenant environments there must be clear separation and isolation of data, accessible only to personnel the NBFC authorises (para 70)."
+  exceptions: "Anonymised or aggregated statistics are not addressed in the extract. Treat them as needing express contract permission and legal review."
+  implementation: "Default `ml.training_scope=tenant`: tenant-scoped feature stores, registries and training jobs. A cross-tenant or global model that uses a regulated tenant's data needs (a) express contract permission, (b) a documented irreversible anonymisation/aggregation method, and (c) DPDP purpose checks. Automated cross-tenant isolation tests (BB-§7)."
+  test_case: "GIVEN tenants A (NBFC) and B (D2C) WHEN a retrain job reads features from both without A's signed `cross_tenant_training` flag THEN the job fails pre-flight with this policy_id."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-RBI-OUTSOURCING-NBFC-AUDIT-001
+  source:
+    title: "NBFC - Managing Risks in Outsourcing Directions, 2025, paras 34(iv), 34(vii), 52-53, 56"
+    url: "https://rbi.org.in/scripts/BS_ViewMasDirections.aspx?id=12941"
+  source_type: primary
+  effective_date: "2025-11-28"
+  jurisdiction: IN
+  applicability: "NBFC tenant contracts; Nirantar subprocessors (LLM, STT/TTS, telephony, WhatsApp BSP); offshore processing."
+  rule: "The contract must give the NBFC audit rights over the provider (para 34(vii)). Subcontractors need the NBFC's prior approval (para 34(iv)). Offshore outsourcing is allowed only to jurisdictions that uphold confidentiality, and must be monitored (paras 52-53). Responsibility for resolving grievances about outsourced services stays with the NBFC (para 56)."
+  exceptions: "The equivalent bank directions were not individually re-read."
+  implementation: "Subprocessor registry with per-tenant approval. `subprocessor.approved_for_tenant` is checked on every routing decision, and residency flags are kept per subprocessor. Audit export API."
+  test_case: "GIVEN an NBFC tenant has not approved 'llm_provider_x' WHEN the LLM gateway routes that tenant's transcript to it THEN DENY, then fall back to an approved provider or fail closed."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+# =====================================================================
+# 8. Grievance redress / Ombudsman
+# =====================================================================
+- policy_id: IN-RBI-OMBUDSMAN-RBIOS-001
+  source:
+    title: "Reserve Bank - Integrated Ombudsman Scheme, 2026 (RBI FAQ page); RE-wise Internal Ombudsman Directions, 2026 (14 Jan 2026)"
+    url: "https://www.rbi.org.in/commonman/english/scripts/FAQs.aspx?Id=3407"
+  source_type: primary
+  effective_date: "2026-07-01"
+  jurisdiction: IN
+  applicability: "Complaints by customers of bank, NBFC (per scheme thresholds), PPI-issuer and CIC tenants, including disputes about recurring debits and recovery conduct."
+  rule: "A customer can complain to the RBI Ombudsman if the RE has not replied within 30 days (or the RBI-specified time) of receiving the complaint, or has rejected it. The complaint must be filed within 90 days of that timeline expiring or of the RE's last communication, whichever is later. Non-maintainable complaints include 'disputes between vendor and Regulated Entity' and services outside RBI's purview."
+  exceptions: "The scheme date (reported as 16 Jan 2026) and the effective date (1 Jul 2026) come from the RBI FAQ page as extracted and should be confirmed against the scheme notification. The 2021 scheme applied before 1 Jul 2026. Nirantar is not an RE, and the tenant owns the grievance."
+  implementation: "Complaint intents create tenant-owned `grievance` cases with SLA timer `grievance.re_response_due=30d` and alerts at 20 and 25 days. Agents never discourage a customer from approaching the Ombudsman. Case exports carry timestamps for the tenant's IO/Ombudsman responses."
+  test_case: "GIVEN a grievance case open for 25 days WHEN the SLA monitor runs THEN the tenant GRO gets an escalation alert."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+# =====================================================================
+# 9. Harmonised TAT for failed transactions
+# =====================================================================
+- policy_id: IN-RBI-TAT-FAILEDTXN-001
+  source:
+    title: "RBI - Harmonisation of Turn Around Time (TAT) and customer compensation for failed transactions using authorised Payment Systems (RBI/2019-20/67, DPSS.CO.PD No.629/02.01.014/2019-20, 20 Sep 2019)"
+    url: "https://www.rbi.org.in/commonman/English/scripts/Notification.aspx?Id=3074"
+  source_type: primary
+  effective_date: "2019-10-15"
+  jurisdiction: IN
+  applicability: "Failed debits where the customer's account was debited but the merchant or beneficiary was not credited (cards, UPI, NACH, IMPS, PPI). Relevant to L3 Failure Triage and L6 disputes."
+  rule: "Failed transactions must be reversed or credited within rail-specific TATs. If the TAT is missed, the bank/operator pays Rs 100 per day of delay. Examples: POS/e-commerce card transactions are auto-reversed within T+5; UPI merchant transactions not confirmed at the merchant are auto-reversed within T+5; NACH uncredited transactions are reversed by the beneficiary bank within T+1; IMPS within T+1; card-to-card within T+1; PPI on-us within T+1."
+  exceptions: "The compensation is paid by banks/operators, not by Nirantar. The full annex rows should be copied into config after a manual re-read."
+  implementation: "Failure Triage state `debited_not_credited` blocks any retry or re-debit (`tat.no_double_debit`) until the provider confirms SUCCESS or REVERSED. The customer message cites the rail TAT from config tied to this policy_id."
+  test_case: "GIVEN a UPI AutoPay debit in PENDING state (customer debited, merchant not credited) WHEN M3 proposes a retry THEN DENY (DOUBLE_DEBIT_RISK)."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+# =====================================================================
+# 10. Digital fraud compensation framework
+# =====================================================================
+- policy_id: IN-RBI-FRAUDCOMP-2027-001
+  source:
+    title: "RBI press release (24 Jun 2026): Amendment Directions for commercial banks, SFBs, payments banks, LABs, RRBs, UCBs and RCBs on customer protection in fraudulent electronic banking transactions; figures from Business Standard (24 Jun 2026) and Lexology"
+    url: "https://www.rbi.org.in/scripts/BS_PressReleaseDisplay.aspx?prid=63011"
+  source_type: primary
+  effective_date: "2027-01-01"
+  jurisdiction: IN
+  applicability: "Bank tenants; customer conversations about unauthorised or fraudulent debits; Dispute Defender."
+  rule: "Verified on the RBI press release: the final Amendment Directions (24 Jun 2026) expand coverage to other categories of fraudulent electronic banking transactions, shorten complaint TATs, and add a compensation scheme for small-value frauds, all effective 1 Jan 2027. Secondary sources only: compensation of 85% of net loss or Rs 25,000, whichever is lower, for gross losses up to Rs 50,000; available once per lifetime; fraud must be reported to the bank and to NCRP/1930 within 5 calendar days; complaints resolved within 45 days (domestic) or 60 days (cross-border)."
+  exceptions: "The Direction text (rbidocs PDF) sits behind a CAPTCHA. All amounts and day-counts are unverified. The existing RBI limited-liability rules continue in amended form."
+  implementation: "An M8 'fraud/unauthorised' intent stops all recovery for that debit, routes to the tenant's fraud desk and shares the bank's 24x7 reporting channel and 1930. Dispute Defender needs human approval before representment on any fraud-reported transaction. Agents never argue against a fraud claim."
+  test_case: "GIVEN a customer says 'I did not make this payment, my account was hacked' WHEN the Conversation agent proposes a payment link THEN DENY. Expected: recovery paused, fraud case created, reporting channels shared."
+  verification_status: partially_verified
+  retrieved: "2026-09-28"
+
+# =====================================================================
+# 11. DPDP Act 2023 & DPDP Rules 2025
+# =====================================================================
+- policy_id: IN-GOI-DPDP-COMMENCEMENT-001
+  source:
+    title: "Digital Personal Data Protection Rules, 2025 - G.S.R. 846(E), Gazette of India (Extraordinary) Part II Sec 3(i), MeitY notification dated 13 Nov 2025, rule 1; PIB backgrounder 17 Nov 2025"
+    url: "https://static.pib.gov.in/WriteReadData/specificdocs/documents/2025/nov/doc20251117695301.pdf"
+  source_type: primary
+  effective_date: "2025-11-13"
+  jurisdiction: IN
+  applicability: "All tenants, and Nirantar itself (Data Processor for tenants; Data Fiduciary for its own users and staff)."
+  rule: "Rule 1(2): rules 1, 2 and 17-21 came into force on publication. Rule 1(3): rule 4 (Consent Managers) comes into force one year after publication, i.e. 13 Nov 2026. Rule 1(4): rules 3, 5-16, 22 and 23 (notice, security, breach, retention, contact, children, SDF, rights, cross-border and others) come into force eighteen months after publication, i.e. 13 May 2027."
+  exceptions: "The Gazette notification is dated 13 Nov 2025, but the PIB backgrounder says the Rules were notified on 14 Nov 2025 (Gazette ID CG-DL-E-14112025 per secondary). Take 13 Nov 2025 as the base date and confirm the exact 18-month end date with counsel. meity.gov.in returned 403; Gazette text read from a third-party copy. Check for any amendment to the timeline."
+  implementation: "`dpdp.*` checks run in shadow mode (log violations) until config date 2027-05-13, then enforce. Build to the full standard now."
+  test_case: "GIVEN system date >= 2027-05-13 WHEN a customer record is ingested without a consent or legitimate-use basis THEN DENY. Before that date THEN ALLOW and emit `dpdp_shadow_violation`."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-GOI-DPDP-NOTICE-CONSENT-001
+  source:
+    title: "DPDP Act, 2023 ss.4-7 (lawful processing, notice, consent, legitimate uses); DPDP Rules, 2025 r.3 (notice)"
+    url: "https://static.pib.gov.in/WriteReadData/specificdocs/documents/2025/nov/doc20251117695301.pdf"
+  source_type: primary
+  effective_date: "2027-05-13"
+  jurisdiction: IN
+  applicability: "Processing of customer personal data for reminders, recovery, voice calls, recordings, analytics and model training."
+  rule: "Rule 3 (read in the Gazette text): the notice must stand on its own and give, in clear and plain language, an itemised description of the personal data and the specific purposes and uses. It must link to the means to withdraw consent (as easily as it was given), exercise rights and complain to the Board. Act (not re-read): processing needs consent or a listed legitimate use, and consent must be free, specific, informed, unconditional and unambiguous, limited to the stated purpose."
+  exceptions: "The Act's section numbers and wording were not re-read in this retrieval. Serving a debit the customer mandated is probably within the purpose consented at mandate creation. Cross-tenant model training is not."
+  implementation: "Consent/purpose ledger per (tenant, customer, purpose) for purposes {payment_servicing, reminders, recovery_contact, voice_recording, analytics_tenant, model_training_tenant, model_training_global}. Every action carries `purpose`, checked by `dpdp.purpose_permitted`. Withdrawal stops processing within the configured SLA."
+  test_case: "GIVEN a customer who consented to payment_servicing only WHEN call audio is queued for training THEN DENY."
+  verification_status: partially_verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-GOI-DPDP-RETENTION-001
+  source:
+    title: "DPDP Rules, 2025 r.6(1)(e), r.8(1)-(3), Third and Seventh Schedules; DPDP Act, 2023 s.8(7)"
+    url: "https://static.pib.gov.in/WriteReadData/specificdocs/documents/2025/nov/doc20251117695301.pdf"
+  source_type: primary
+  effective_date: "2027-05-13"
+  jurisdiction: IN
+  applicability: "All stored personal data, call recordings, transcripts, features, training sets and processing logs."
+  rule: "Rule 8(3): for any processing, including by a Processor, the Fiduciary must keep the personal data, traffic data and processing logs for AT LEAST one year from the date of processing (Seventh Schedule purposes), and erase them afterwards unless another law requires longer. Rule 6(1)(e): keep logs and personal data for one year to detect, investigate and remediate unauthorised access. Rule 8(1)-(2): for Third-Schedule classes (large e-commerce, gaming and social-media platforms, e.g. 3 years of inactivity), erase after the period, with 48 hours' prior notice to the Data Principal. Act s.8(7) (not re-read): erase when the purpose is served or consent is withdrawn, unless law requires retention."
+  exceptions: "The Third-Schedule classes probably do not include Nirantar's tenants; check per tenant. RBI KYC/PMLA and other sectoral retention rules may require longer periods (tenant's obligation)."
+  implementation: "Retention policy per data class, with a floor of 365 days for personal data and processing logs (from 2027-05-13) and a ceiling set by the tenant. Erasure workflow (Temporal) covers feature store, vector store, object store and backups (crypto-shred), and marks training datasets for exclusion. PII is redacted before LLM calls."
+  test_case: "GIVEN a tenant request to auto-delete call audio after 30 days WHEN saved after 2027-05-13 THEN it is rejected (below the 365-day floor, r.8(3)) unless counsel records an exception. GIVEN 400-day-old audio with a 365-day tenant limit THEN it is crypto-shredded and excluded from the next retrain."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-GOI-DPDP-BREACH-001
+  source:
+    title: "DPDP Rules, 2025 r.7 (intimation of personal data breach); r.6 (reasonable security safeguards)"
+    url: "https://static.pib.gov.in/WriteReadData/specificdocs/documents/2025/nov/doc20251117695301.pdf"
+  source_type: primary
+  effective_date: "2027-05-13"
+  jurisdiction: IN
+  applicability: "Any personal data breach at Nirantar or its subprocessors that affects tenant data."
+  rule: "On becoming aware of a breach, the Fiduciary must inform each affected Data Principal without delay: the nature, extent and timing, likely consequences, mitigation, safety steps they can take, and a contact. It must inform the Board without delay, and send a detailed report within 72 hours of becoming aware (or longer if the Board allows in writing). Rule 6 minimum safeguards include encryption/masking/tokens, access control, logs and monitoring, backups, and processor contract clauses."
+  exceptions: "CERT-In incident-reporting directions and RBI RE incident reporting also apply; not re-read in this retrieval."
+  implementation: "Incident workflow timers: `breach.notify_tenant <= 24h` (contract) and a Board-report data pack for the Fiduciary by T0+48h. A per-tenant data inventory scopes the affected principals."
+  test_case: "GIVEN a confirmed breach at T0 WHEN the incident workflow starts THEN the tenant notice is due by T0+24h and the Board-report pack by T0+48h."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-GOI-DPDP-SDF-001
+  source:
+    title: "DPDP Rules, 2025 r.13 (additional obligations of Significant Data Fiduciary); DPDP Act, 2023 s.10"
+    url: "https://static.pib.gov.in/WriteReadData/specificdocs/documents/2025/nov/doc20251117695301.pdf"
+  source_type: primary
+  effective_date: "2027-05-13"
+  jurisdiction: IN
+  applicability: "Large bank/NBFC tenants that may be notified as SDFs; Nirantar as their processor."
+  rule: "An SDF must carry out a DPIA and an audit once every 12 months and report significant observations to the Board. It must verify that technical measures, including algorithmic software, are unlikely to risk Data Principals' rights. Personal data specified by the Government, on a committee's recommendation, must not be transferred outside India."
+  exceptions: "No SDF notification was checked in this retrieval."
+  implementation: "Model cards and DPIA input packs are exportable per model. When `tenant.is_sdf=true`: India-only processing, and a DPIA reference is required before promoting a model."
+  test_case: "GIVEN tenant.is_sdf=true WHEN an M5 uplift model is promoted without `dpia_ref` THEN the promotion gate fails."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-GOI-DPDP-PROCESSOR-001
+  source:
+    title: "DPDP Act, 2023 s.8(1)-(2) (Fiduciary responsible; Processor only under valid contract); DPDP Rules r.6(1)(f)"
+    url: "https://static.pib.gov.in/WriteReadData/specificdocs/documents/2025/nov/doc20251117695301.pdf"
+  source_type: primary
+  effective_date: "2027-05-13"
+  jurisdiction: IN
+  applicability: "Nirantar's role for all tenants."
+  rule: "A Data Fiduciary may engage a Processor only under a valid contract, and stays responsible for the processing. Rule 6(1)(f) requires security-safeguard clauses in that contract. A processor acting for its own purposes risks being treated as a Fiduciary for that processing."
+  exceptions: "Act section text was not re-read. Rule 6(1)(f) was read."
+  implementation: "DPA per tenant listing purposes. Any processing purpose not in the DPA is DENY (`dpdp.processor_scope`)."
+  test_case: "GIVEN a DPA with purposes {payment_servicing, recovery_contact} WHEN a cross-tenant benchmark uses that tenant's rows THEN DENY."
+  verification_status: partially_verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-GOI-DPDP-RIGHTS-001
+  source:
+    title: "DPDP Rules, 2025 r.9 (contact information), r.14 (rights; grievance response within 90 days)"
+    url: "https://static.pib.gov.in/WriteReadData/specificdocs/documents/2025/nov/doc20251117695301.pdf"
+  source_type: primary
+  effective_date: "2027-05-13"
+  jurisdiction: IN
+  applicability: "Data-principal requests (access, correction, erasure, nomination) received through Nirantar channels (WhatsApp, voice)."
+  rule: "The Fiduciary must publish the contact details of its DPO or another person who can answer processing questions (r.9). It must publish, and meet, a grievance response period of no more than 90 days (r.14(3))."
+  exceptions: "The tenant (Fiduciary) sets the period, up to 90 days."
+  implementation: "M8 intent 'data request' is routed to the tenant DSR queue with a timer set to the tenant's period (at most 90 days). Nirantar never refuses or answers a data request on the tenant's behalf unless configured to."
+  test_case: "GIVEN a customer says on WhatsApp 'delete my data' WHEN detected THEN a DSR case exists in the tenant queue with a due date <= 90 days."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+# =====================================================================
+# 12. TRAI TCCCPR
+# =====================================================================
+- policy_id: IN-TRAI-TCCCPR-DLT-001
+  source:
+    title: "TRAI Telecom Commercial Communications Customer Preference (Second Amendment) Regulations, 2025 (1 of 2025), No. RG-25/(25)/2023-QoS, 12 Feb 2025, amending TCCCPR 2018; regs 2-3"
+    url: "https://trai.gov.in/sites/default/files/2025-02/Regulation_12022025.pdf"
+  source_type: primary
+  effective_date: UNVERIFIED
+  jurisdiction: IN
+  applicability: "SMS and voice sent over Indian telecom networks for all tenants (reminders, recovery, win-back)."
+  rule: "Commercial communication may only use registered headers, or numbers from the special series assigned for commercial communication. Unregistered senders can have their telecom resources suspended (reg 3). Promotional messages must carry an opt-out and go only to recipients who have not blocked the category, or who have given (digital) consent. Mixing promotional content into a transactional or service message makes it promotional. 'Transactional' is limited to messages triggered within 30 minutes of a customer-initiated transaction. A 'Service' message or call is (i) information about a product or service the customer bought, needing no explicit consent, or (ii) a message facilitating an ongoing commercial transaction, needing explicit consent valid for 7 days."
+  exceptions: "Commencement is 30 days after Gazette publication (some regulations 60 days), and the Gazette publication date was not captured. The regulation date is 12 Feb 2025."
+  implementation: "Comms MCP requires `dlt.header`, `dlt.template_id` and `message_category in {TRANSACTIONAL, SERVICE_INFO, SERVICE_CONSENT, PROMOTIONAL}`. Payment-failure and pre-debit reminders are SERVICE_INFO. Win-back offers and discounts are PROMOTIONAL and need a preference/consent check plus an opt-out. The lint blocks promotional content in SERVICE templates."
+  test_case: "GIVEN a failed-payment reminder that adds '20% off if you renew today' WHEN classified THEN it is PROMOTIONAL, and it is DENY for a DND-registered recipient without explicit consent."
+  verification_status: partially_verified
+  retrieved: "2026-09-28"
+
+- policy_id: IN-TRAI-TCCCPR-VOICE-001
+  source:
+    title: "TRAI TCCCPR (Second Amendment) Regulations, 2025 - definitions (av), (bh), reg 3; Explanatory Memorandum paras 16-18 (designated series; 140-series promotional; 1600-series service/transactional auto-dialer/robo calls)"
+    url: "https://trai.gov.in/sites/default/files/2025-02/Regulation_12022025.pdf"
+  source_type: primary
+  effective_date: UNVERIFIED
+  jurisdiction: IN
+  applicability: "The Nirantar voice agent (Exotel) for subscription recovery, pre-debit reminders and lending collections."
+  rule: "All commercial calls must come from designated number series. Promotional voice calls, including auto-dialer and robo calls, go through the 140-series only. Service and transactional auto-dialer/robo calls go through the 1600-series or another series allotted for the purpose. Senders must pre-declare auto-dialer/robo-call use and purpose to the originating access provider. A call with any promotional content is treated as a promotional voice call."
+  exceptions: "The 1600-series and pre-declaration points come from the Explanatory Memorandum; the operative DoT/TRAI allocation directions were not re-read. TCCCPR sets no fixed clock-hour window for service calls; time bands apply to promotional preferences."
+  implementation: "Voice MCP `start_call` requires `caller_id_series in {1600_SERVICE, 140_PROMO}`, `sender_registered=true` and `robocall_predeclared=true`. The series is chosen by content class; any offer content forces 140_PROMO plus a preference/consent check."
+  test_case: "GIVEN a subscription-recovery AI call from an ordinary 10-digit number WHEN start_call is invoked THEN DENY. GIVEN a 1600-series call whose script contains a discount offer THEN DENY (promotional content on the service series)."
+  verification_status: partially_verified
+  retrieved: "2026-09-28"
+
+# =====================================================================
+# 13. Payment data storage localisation
+# =====================================================================
+- policy_id: IN-RBI-DATALOCAL-001
+  source:
+    title: "RBI - Storage of Payment System Data (RBI/2017-18/153, DPSS.CO.OD No.2785/06.08.005/2017-2018, 6 Apr 2018)"
+    url: "https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=11244"
+  source_type: primary
+  effective_date: "2018-10-15"
+  jurisdiction: IN
+  applicability: "Payment system data handled by system providers and, through them, their service providers, intermediaries and third-party vendors, which includes Nirantar."
+  rule: "System providers must ensure that ALL data relating to the payment systems they operate (full end-to-end transaction details and payment instruction information) is stored only in a system in India. Compliance was due within six months (15 Oct 2018), with a CERT-In-empanelled system audit report due by 31 Dec 2018."
+  exceptions: "The RBI FAQs on foreign processing (reportedly allowing processing abroad with deletion and return to India within a set time) were not re-read. Assume no foreign storage."
+  implementation: "`residency.india_only` for payment data classes (UTR, VPA, card token refs, amounts tied to identities) across DBs, logs, backups, vector stores and LLM/STT subprocessors. Non-India subprocessors get only redacted payloads."
+  test_case: "GIVEN an LLM endpoint in region us-east WHEN a prompt contains a UTR and payer VPA THEN DENY; the gateway redacts the payload or falls back to an India-region model."
+  verification_status: verified
+  retrieved: "2026-09-28"
+
+# =====================================================================
+# 14. Payment Aggregator Directions (effect on a non-PA vendor)
+# =====================================================================
+- policy_id: IN-RBI-PA-2025-VENDOR-001
+  source:
+    title: "Reserve Bank of India (Regulation of Payment Aggregators) Directions, 2025 (15 Sep 2025; press release 2025-2026/1102), paras 9(a), 9(c), 10(b), 10(g)-(h), 13"
+    url: "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx?id=12896"
+  source_type: primary
+  effective_date: "2025-09-15"
+  jurisdiction: IN
+  applicability: "Nirantar as a non-PA technology vendor integrating with PAs (Razorpay, Cashfree, Stripe India)."
+  rule: "PAs must do merchant due diligence under the KYC Master Direction (para 13). They must ensure merchant infrastructure meets PCI-DSS/PCI-SSF (para 9(a)) and that card credentials are not stored in merchant-accessible databases (para 10(g)). PAs must comply with the payment-data storage rules (para 9(c)). They may use PGs/technology providers subject to RBI's IT and outsourcing rules (para 10(h)). The Directions add rules on escrow operations and PA categories."
+  exceptions: "Paragraph text came from an automated extraction of the rbi.org.in page. These obligations reach Nirantar through PA contracts, not directly. Only PAs may handle funds and escrow."
+  implementation: "Positioning guards: no funds flow through Nirantar accounts (`treasury.no_pooled_funds`). Copy lint blocks 'RBI-authorised' and 'payment aggregator' in self-descriptions. Adapters use PA APIs only and keep PA-required security attestations per tenant."
+  test_case: "GIVEN a proposed flow that settles customer money into a Nirantar-owned account WHEN configured THEN the architecture gate returns DENY."
+  verification_status: partially_verified
+  retrieved: "2026-09-28"

@@ -1,0 +1,136 @@
+# Platform default message/voice templates (P1, ADR-0011).
+# A tenant starts with these; it can propose its own versions, which go live only after a second person
+# approves them (maker-checker) and they pass the compliance checks in nirantar.settings.templates.
+# Placeholders: facts are injected by code (amount from Money formatting, link from the payment-link tool).
+version: "2026-09-29.1"
+
+specs:
+  whatsapp.recovery:
+    channel: whatsapp
+    required: [amount, link]
+    allowed: [name, amount, plan, link]
+  sms.predebit_notice:
+    channel: sms
+    mandatory: true
+    required: [amount, date]
+    allowed: [amount, date, plan]
+  whatsapp.winback:
+    channel: whatsapp
+    promotional: true            # contains an offer → promotional consent required (IN-TRAI-TCCCPR-DLT-001)
+    required: [link]
+    allowed: [name, plan, offer, link]
+  offer.discount_pct:            # fills {offer} in whatsapp.winback for discount arms
+    channel: whatsapp
+    promotional: true
+    required: [pct]
+    allowed: [pct]
+  offer.reminder:                # fills {offer} for the no-discount arm
+    channel: whatsapp
+    required: []
+    allowed: []
+  whatsapp.predebit_notice:      # mandatory pre-debit notice on WhatsApp (used while SMS/DLT is not connected)
+    channel: whatsapp
+    mandatory: true
+    required: [amount, date]
+    allowed: [amount, date, plan]
+  whatsapp.reply_ack_promise:    # in-session acknowledgements of a customer's reply (free text, never promotional)
+    channel: whatsapp
+    required: [date]
+    allowed: [name, date]
+  whatsapp.reply_ack_hardship: {channel: whatsapp, required: [], allowed: [name]}
+  whatsapp.reply_ack_optout: {channel: whatsapp, required: [], allowed: [name]}
+  whatsapp.reply_ack_other: {channel: whatsapp, required: [], allowed: [name]}
+  whatsapp.mandate_reauth:       # service message: the customer must re-authorise their mandate (NPCI: payer acts)
+    channel: whatsapp
+    required: [link, date]
+    allowed: [name, plan, link, date]
+  whatsapp.mandate_resume:       # service message: a paused UPI AutoPay mandate is resumed in the payer's UPI app
+    channel: whatsapp
+    required: [date]
+    allowed: [name, plan, date]
+  voice.greeting:
+    channel: voice
+    required: [merchant, amount]
+    allowed: [merchant, amount]
+  voice.promise_to_pay: {channel: voice, required: [], allowed: []}
+  voice.hardship: {channel: voice, required: [], allowed: []}
+  voice.opt_out: {channel: voice, required: [], allowed: []}
+  voice.otp_guard: {channel: voice, required: [], allowed: []}
+  voice.reprompt: {channel: voice, required: [], allowed: []}
+  voice.goodbye: {channel: voice, required: [], allowed: []}
+
+templates:
+  whatsapp.recovery:
+    en: "Hi {name}, your {amount} payment for {plan} didn't go through. You can pay securely here: {link}"
+    hi: "नमस्ते {name}, {plan} के लिए आपका {amount} का भुगतान नहीं हो पाया। आप यहाँ सुरक्षित भुगतान कर सकते हैं: {link}"
+    te: "నమస్తే {name}, {plan} కోసం మీ {amount} చెల్లింపు పూర్తి కాలేదు. ఇక్కడ సురక్షితంగా చెల్లించవచ్చు: {link}"
+  whatsapp.winback:
+    en: "Hi {name}, we'd love to have you back on {plan}. {offer} Restart here: {link} (reply STOP to opt out)"
+    hi: "नमस्ते {name}, हम चाहेंगे कि आप {plan} पर वापस आएँ। {offer} यहाँ फिर से शुरू करें: {link} (बंद करने के लिए STOP लिखें)"
+    te: "నమస్తే {name}, మీరు మళ్ళీ {plan}కి తిరిగి రావాలని కోరుకుంటున్నాము. {offer} ఇక్కడ మళ్ళీ ప్రారంభించండి: {link} (ఆపడానికి STOP పంపండి)"
+  offer.discount_pct:
+    en: "Your restart comes with {pct}% off the first payment."
+    hi: "दोबारा शुरू करने पर पहले भुगतान पर {pct}% की छूट मिलेगी।"
+    te: "మళ్ళీ ప్రారంభిస్తే మొదటి చెల్లింపుపై {pct}% తగ్గింపు లభిస్తుంది."
+  offer.reminder:
+    en: "Your plan and history are still here for you."
+    hi: "आपका प्लान और इतिहास अब भी आपके लिए यहाँ है।"
+    te: "మీ ప్లాన్ మరియు చరిత్ర ఇంకా మీ కోసం ఇక్కడే ఉన్నాయి."
+  whatsapp.predebit_notice:
+    en: "Reminder: {amount} will be auto-debited on {date} for your {plan}. Reply STOP to manage your auto-pay."
+    hi: "सूचना: आपके {plan} के लिए {date} को {amount} ऑटो-डेबिट होगा। ऑटो-पे बदलने के लिए STOP लिखें।"
+    te: "గమనిక: మీ {plan} కోసం {date} న {amount} ఆటో-డెబిట్ అవుతుంది. ఆటో-పే మార్చడానికి STOP పంపండి."
+  whatsapp.reply_ack_promise:
+    en: "Thank you {name}, we have noted that you will pay by {date}."
+    hi: "धन्यवाद {name}, हमने नोट कर लिया है कि आप {date} तक भुगतान करेंगे।"
+    te: "ధన్యవాదాలు {name}, మీరు {date} లోపు చెల్లిస్తారని మేము నమోదు చేసుకున్నాము."
+  whatsapp.reply_ack_hardship:
+    en: "We are sorry to hear that, {name}. A member of our team will contact you to help."
+    hi: "यह सुनकर हमें खेद है, {name}। हमारी टीम का एक सदस्य आपकी मदद के लिए संपर्क करेगा।"
+    te: "అది విని మేము చింతిస్తున్నాము, {name}. మీకు సహాయం చేయడానికి మా బృందం సభ్యుడు సంప్రదిస్తారు."
+  whatsapp.reply_ack_optout:
+    en: "Done, {name}. You will not receive further reminders on WhatsApp."
+    hi: "ठीक है, {name}। आपको अब WhatsApp पर और रिमाइंडर नहीं मिलेंगे।"
+    te: "సరే, {name}. ఇకపై మీకు WhatsApp లో రిమైండర్లు రావు."
+  whatsapp.reply_ack_other:
+    en: "Thank you {name}, we have received your message and will get back to you."
+    hi: "धन्यवाद {name}, हमें आपका संदेश मिल गया है, हम जल्द जवाब देंगे।"
+    te: "ధన్యవాదాలు {name}, మీ సందేశం మాకు అందింది, త్వరలో సమాధానం ఇస్తాము."
+  whatsapp.mandate_reauth:
+    en: "Hi {name}, the auto-pay for your {plan} needs to be renewed before {date}. Please authorise it here: {link}"
+    hi: "नमस्ते {name}, आपके {plan} का ऑटो-पे {date} से पहले नवीनीकृत करना ज़रूरी है। कृपया यहाँ अधिकृत करें: {link}"
+    te: "నమస్తే {name}, మీ {plan} ఆటో-పే {date} లోపు పునరుద్ధరించాలి. దయచేసి ఇక్కడ అనుమతించండి: {link}"
+  whatsapp.mandate_resume:
+    en: "Hi {name}, the UPI auto-pay for your {plan} is paused. Please resume it in your UPI app before {date} so your next payment goes through."
+    hi: "नमस्ते {name}, आपके {plan} का UPI ऑटो-पे रुका हुआ है। अगला भुगतान हो सके, इसके लिए कृपया {date} से पहले अपने UPI ऐप में इसे फिर से चालू करें।"
+    te: "నమస్తే {name}, మీ {plan} UPI ఆటో-పే నిలిపివేయబడింది. తదుపరి చెల్లింపు జరగాలంటే దయచేసి {date} లోపు మీ UPI యాప్‌లో దాన్ని మళ్ళీ ప్రారంభించండి."
+  sms.predebit_notice:
+    en: "Reminder: {amount} will be debited on {date} for your {plan}. Reply STOP to manage your mandate."
+  voice.greeting:
+    en: "Hello, this is an automated call from {merchant} about your subscription payment of {amount}. This call may be recorded. Would you like us to send a secure payment link?"
+    hi: "नमस्ते, यह {merchant} की ओर से आपके {amount} के सब्सक्रिप्शन भुगतान के बारे में एक स्वचालित कॉल है। यह कॉल रिकॉर्ड की जा सकती है। क्या हम आपको सुरक्षित भुगतान लिंक भेजें?"
+    te: "నమస్తే, ఇది {merchant} నుండి మీ {amount} సబ్‌స్క్రిప్షన్ చెల్లింపు గురించి ఆటోమేటెడ్ కాల్. ఈ కాల్ రికార్డ్ చేయబడవచ్చు. మీకు సురక్షితమైన చెల్లింపు లింక్ పంపమంటారా?"
+  voice.promise_to_pay:
+    en: "Thank you. We have sent a secure payment link by SMS. Goodbye."
+    hi: "धन्यवाद। हमने SMS से सुरक्षित भुगतान लिंक भेज दिया है। नमस्ते।"
+    te: "ధన్యవాదాలు. SMS ద్వారా సురక్షితమైన చెల్లింపు లింక్ పంపాము. నమస్తే."
+  voice.hardship:
+    en: "I understand. I am connecting you to a member of our team now."
+    hi: "मैं समझता हूँ। मैं आपको अभी हमारी टीम के सदस्य से जोड़ रहा हूँ।"
+    te: "అర్థమైంది. ఇప్పుడే మిమ్మల్ని మా టీమ్ సభ్యుడితో కలుపుతున్నాను."
+  voice.opt_out:
+    en: "Understood. We will not call you again about this. Goodbye."
+    hi: "ठीक है। इस बारे में हम आपको दोबारा कॉल नहीं करेंगे। नमस्ते।"
+    te: "సరే. దీని గురించి మేము మీకు మళ్ళీ కాల్ చేయము. నమస్తే."
+  voice.otp_guard:
+    en: "Please never share any OTP or PIN with anyone, including us. We will never ask for it."
+    hi: "कृपया किसी के साथ भी OTP या PIN साझा न करें, हमारे साथ भी नहीं। हम कभी नहीं पूछेंगे।"
+    te: "దయచేసి OTP లేదా PIN ఎవరితోనూ, మాతో కూడా పంచుకోకండి. మేము ఎప్పుడూ అడగము."
+  voice.reprompt:
+    en: "Sorry, I did not catch that. Would you like a secure payment link by SMS?"
+    hi: "माफ़ कीजिए, मैं समझ नहीं पाया। क्या हम SMS से सुरक्षित भुगतान लिंक भेजें?"
+    te: "క్షమించండి, అర్థం కాలేదు. SMS ద్వారా సురక్షితమైన చెల్లింపు లింక్ పంపమంటారా?"
+  voice.goodbye:
+    en: "Thank you for your time. Goodbye."
+    hi: "आपके समय के लिए धन्यवाद। नमस्ते।"
+    te: "మీ సమయానికి ధన్యవాదాలు. నమస్తే."

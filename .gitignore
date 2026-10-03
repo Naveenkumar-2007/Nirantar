@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.env
+.env.*
+!.env.example
+node_modules/
+.next/
+mlruns/
+data/raw/
+data/processed/
+evals/results/tmp/
+*.log
+.dagster/
+.tmp_dagster_home*/
+
+# local runtime state (MLflow tracking DB / artifacts)
+ml/mlflow.db
+mlartifacts/
+.hypothesis/
+.import_linter_cache/

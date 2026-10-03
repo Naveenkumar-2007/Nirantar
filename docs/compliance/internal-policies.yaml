@@ -1,0 +1,19 @@
+# Nirantar internal governance policies. These are NOT regulations; they are platform
+# rules (ADR-0004) that the policy engine enforces and cites separately from the regulatory KB.
+policies:
+  - policy_id: NIR-GOV-CONTACT-WINDOW-001
+    source: "ADR-0004 (b) platform default contact window"
+    rule: "Customer contact only 09:00-20:00 customer-local time unless a stricter segment rule applies; tenants may only narrow."
+    test_case: "Given a subscription tenant at 21:30 IST, when a WhatsApp nudge is requested, then DENY with retry_after 09:00 next day."
+  - policy_id: NIR-GOV-FATIGUE-001
+    source: "Contact Arbiter fatigue budget (BB-§16)"
+    rule: "At most max_contacts_7d optional contacts per customer per rolling 7 days (default 3); mandatory notices exempt."
+    test_case: "Given 3 contacts in 7 days, when a 4th optional nudge is requested, then DENY."
+  - policy_id: NIR-GOV-MAKER-CHECKER-001
+    source: "BB-§32 approvals"
+    rule: "Legal notices, credit draws, payout reschedules, dispute acceptance, and refunds/representments above tenant thresholds require a signed human approval."
+    test_case: "Given a ₹8,000 refund with ₹5,000 threshold, then REQUIRE_APPROVAL."
+  - policy_id: NIR-GOV-CONSENT-001
+    source: "BB-§26, DPDP-aligned consent handling (engineering control, not a legal determination)"
+    rule: "No optional contact on a channel without a recorded consent for that channel; opt-outs always honoured."
+    test_case: "Given no WhatsApp consent, when a WhatsApp nudge is requested, then DENY."

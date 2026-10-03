@@ -1,0 +1,15 @@
+# LLM routing: tier → ordered chain of (provider, model). Model ids verified in docs/integrations (ADR-0005).
+# Override per deployment with NIRANTAR_LLM_ROUTING=/path/to/file.yaml.
+version: "2026-09-29.1"
+routes:
+  fast:
+    - [groq, openai/gpt-oss-20b]
+    - [groq, llama-3.1-8b-instant]
+  mid:
+    - [groq, openai/gpt-oss-120b]
+    - [groq, llama-3.3-70b-versatile]
+  strong:
+    - [groq, openai/gpt-oss-120b]
+  indic:
+    - [sarvam, sarvam-105b-conversations]
+    - [groq, openai/gpt-oss-120b]

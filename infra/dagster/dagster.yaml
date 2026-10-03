@@ -1,0 +1,8 @@
+# Dagster instance config for Nirantar. Copy to $DAGSTER_HOME/dagster.yaml.
+telemetry:
+  enabled: false
+run_coordinator:              # queue runs; never more than 4 tenant pipelines at once
+  module: dagster._core.run_coordinator
+  class: QueuedRunCoordinator
+  config:
+    max_concurrent_runs: 4

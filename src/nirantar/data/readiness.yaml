@@ -1,0 +1,23 @@
+# Minimum evidence before a PER-TENANT model is trained (P3). Below these, the tenant stays on rules + the
+# global prior (cold start, ADR-0012). Numbers are engineering judgement for stable estimates, not facts;
+# they are shown to the tenant next to what they currently have.
+version: "2026-10-01.1"
+models:
+  m1_debit_failure:
+    title: Debit failure risk (M1)
+    requires: {attempted_cycles: 2000, first_attempt_failures: 200, history_days: 90}   # label known at 1st attempt
+  m3_retry_timing:
+    title: Retry timing (M3)
+    requires: {recovered_cycles: 300, history_days: 90}                          # needs final outcomes
+  m6_churn:
+    title: Churn / lapse (M6)
+    requires: {subscriptions: 500, churned_subscriptions: 100, history_days: 180}
+  m13_churn_type:
+    title: Churn reason — payment trouble vs choice (M13)
+    requires: {involuntary_churn: 50, voluntary_churn: 50, history_days: 180}
+  m15_clv:
+    title: Customer lifetime value (M15, sBG)
+    requires: {subscriptions: 200, churned_subscriptions: 30, history_days: 120}
+  m10_cash_forecast:
+    title: Cash forecast (M10)
+    requires: {history_days: 120, final_cycles: 1000}

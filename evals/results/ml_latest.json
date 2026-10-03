@@ -1,0 +1,110 @@
+{
+  "data_source": "recursim",
+  "config": {
+    "n_customers": 4000,
+    "months": 12,
+    "start": "2025-10-01",
+    "n_banks": 8,
+    "seed": 7,
+    "arm_probs": [
+      0.34,
+      0.33,
+      0.33
+    ],
+    "incident_rate_per_day": 0.08,
+    "hourly_txn_rate": 400.0
+  },
+  "m1": {
+    "model": "m1_debit_failure",
+    "run_id": "20edcfb02853436996d19580edf8d8de",
+    "gate_passed": true,
+    "reasons": [],
+    "champion_version": "3",
+    "baseline": {
+      "auc": 0.7397390175997478,
+      "pr_auc": 0.3562784250474554,
+      "brier": 0.10039680927880856,
+      "ece": 0.012523504535100512,
+      "base_rate": 0.13059135708870356
+    },
+    "advanced": {
+      "auc": 0.7524138229988644,
+      "pr_auc": 0.36941029313818136,
+      "brier": 0.09753419878092352,
+      "ece": 0.011421631313928487,
+      "base_rate": 0.13059135708870356
+    }
+  },
+  "m4": {
+    "model": "m4_bank_health",
+    "ewma": {
+      "incidents": 239,
+      "detected": 239,
+      "incident_recall": 1.0,
+      "median_detection_delay_hours": 0.0,
+      "false_alarms_per_bank_week": 0.28767123287671226
+    },
+    "bocpd": {
+      "incidents": 239,
+      "detected": 213,
+      "incident_recall": 0.891213389121339,
+      "median_detection_delay_hours": 0.0,
+      "false_alarms_per_bank_week": 0.0
+    },
+    "champion": "ewma",
+    "gate_reasons": {
+      "ewma": [],
+      "bocpd": []
+    }
+  },
+  "m5": {
+    "model": "m5_uplift",
+    "gate_passed": false,
+    "mode": "shadow",
+    "reasons": [
+      "capacity_gain_vs_amount_heuristic -5343.4993 < 0.0",
+      "policy_gain_vs_best_single_arm -14167.2689 < 0.0"
+    ],
+    "baseline": {
+      "pehe": 0.1884417600103787,
+      "qini": 0.011021798196613888,
+      "policy_value_minor": 212778.91880506216,
+      "policy_gain_vs_best_single_arm": -12622.229991960223
+    },
+    "advanced": {
+      "pehe": 0.20588516669720133,
+      "qini": 0.009057416689516687,
+      "policy_value_minor": 211233.87986883937,
+      "policy_gain_vs_best_single_arm": -14167.26892818301,
+      "capacity_gain_vs_amount_heuristic": -5343.4992799210595
+    },
+    "policy_values_minor": {
+      "always_none": 169939.42352456777,
+      "always_whatsapp": 195373.30463484942,
+      "always_voice": 225401.14879702238,
+      "baseline_policy": 212778.91880506216,
+      "advanced_policy": 211233.87986883937
+    },
+    "capacity_20pct_minor": {
+      "random": 195665.0302511178,
+      "largest_amount": 211853.4522092077,
+      "t_learner": 208117.35803445245,
+      "dr_learner": 206509.95292928664,
+      "oracle": 218271.49667729752
+    }
+  },
+  "m10": {
+    "model": "m10_cash_forecast",
+    "gate_passed": true,
+    "reasons": [],
+    "baseline": {
+      "wape": 0.3686574674402415
+    },
+    "advanced": {
+      "wape": 0.09776672440496505,
+      "interval_coverage": 0.9642857142857143,
+      "interval_halfwidth_minor": 3079418.662348367
+    },
+    "test_days": 56
+  }
+}

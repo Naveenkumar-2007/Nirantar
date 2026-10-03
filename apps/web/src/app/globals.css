@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #f7f7f5;
+  --card: #ffffff;
+  --fg: #16181d;
+  --muted: #5f6570;
+  --border: #e4e4e0;
+  --chip: #efefeb;
+  --accent: #0f766e;
+  --good-bg: #e3f4ec; --good-fg: #146c43;
+  --bad-bg: #fbe5e3; --bad-fg: #a1261b;
+  --warn-bg: #fdf1dc; --warn-fg: #8a5a00;
+  --info-bg: #e6eefc; --info-fg: #1f4fa8;
+  /* chart series (categorical slots 1–2, validated vs --card in both modes) */
+  --series-1: #2a78d6; --series-2: #eb6834; --grid: #ececea;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101214;
+    --card: #171a1d;
+    --fg: #e8e9eb;
+    --muted: #9aa1ab;
+    --border: #2a2e33;
+    --chip: #22262b;
+    --accent: #2dd4bf;
+    --good-bg: #123325; --good-fg: #7fe0ae;
+    --bad-bg: #3b1714; --bad-fg: #ff9b8f;
+    --warn-bg: #3a2c0c; --warn-fg: #f6c86b;
+    --info-bg: #132746; --info-fg: #8fb6ff;
+    --series-1: #3987e5; --series-2: #d95926; --grid: #262a2f;
+  }
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, "Segoe UI", "Noto Sans", "Noto Sans Telugu",
+    "Noto Sans Devanagari", sans-serif;
+}

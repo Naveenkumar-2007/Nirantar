@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "nirantar-local",
+      "credentials": [{ "accessKey": "nirantar", "secretKey": "nirantar-secret" }],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    }
+  ]
+}

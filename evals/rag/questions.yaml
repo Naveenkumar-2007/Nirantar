@@ -1,0 +1,38 @@
+# Labelled retrieval set: each question must retrieve at least one of `expect` within top-k.
+# Written from the policy records; used for recall@k and MRR (BB-§39).
+- q: How many hours before a recurring debit must the customer get a pre-debit notification?
+  expect: [IN-RBI-EMANDATE-PREDEBIT-001]
+- q: Up to what amount can an e-mandate debit run without additional factor authentication?
+  expect: [IN-RBI-EMANDATE-AFA-001]
+- q: Can a customer opt out of a single debit under an e-mandate?
+  expect: [IN-RBI-EMANDATE-OPTOUT-001]
+- q: What must be sent to the customer after a recurring debit is processed?
+  expect: [IN-RBI-EMANDATE-POSTDEBIT-001]
+- q: Between what hours can recovery agents contact borrowers?
+  expect: [IN-RBI-RBC-RECOVERY-HOURS-001]
+- q: Contact hours for microfinance loan recovery
+  expect: [IN-RBI-RBC-RECOVERY-MFI-HOURS-001]
+- q: Can a lender's recovery agent call the borrower's relatives or employer?
+  expect: [IN-RBI-RBC-RECOVERY-CONDUCT-001]
+- q: Must the borrower be told the recovery agent's details before first contact?
+  expect: [IN-RBI-RBC-RECOVERY-AGENTINFO-001, IN-RBI-DLD-2025-RECOVERY-001]
+- q: Compensation for failed UPI transactions not reversed within the turnaround time
+  expect: [IN-RBI-TAT-FAILEDTXN-001]
+- q: Within how many hours must a personal data breach be reported to the Data Protection Board?
+  expect: [IN-GOI-DPDP-BREACH-001]
+- q: How long must personal data and processing logs be retained under the DPDP Rules?
+  expect: [IN-GOI-DPDP-RETENTION-001]
+- q: Where must payment system data be stored?
+  expect: [IN-RBI-DATALOCAL-001]
+- q: Does a reminder message that includes a discount count as promotional under TRAI rules?
+  expect: [IN-TRAI-TCCCPR-DLT-001]
+- q: Which caller series must be used for service robocalls?
+  expect: [IN-TRAI-TCCCPR-VOICE-001]
+- q: Can the NBFC outsource and combine data of multiple lenders at a service provider?
+  expect: [IN-RBI-OUTSOURCING-NBFC-DATAISOLATION-001, IN-RBI-OUTSOURCING-NBFC-001]
+- q: What is the maximum number of optional contacts per customer per week on the platform?
+  expect: [NIR-GOV-FATIGUE-001]
+- q: Which actions always require a human maker-checker approval?
+  expect: [NIR-GOV-MAKER-CHECKER-001]
+- q: When does compensation for small value digital fraud start applying?
+  expect: [IN-RBI-FRAUDCOMP-2027-001]

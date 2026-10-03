@@ -1,0 +1,58 @@
+# Dataset registry (BB-§18). Every dataset used for training/evaluation must be listed.
+# allowed_use: research | internal_eval | commercial_training
+# class: research | synthetic | sandbox | customer_provided | production
+datasets:
+  - dataset_id: recursim-v1
+    class: synthetic
+    source: "nirantar.ml.recursim (this repo)"
+    license: "internal"
+    collection_date: "generated on demand (seeded)"
+    schema: "customers, debits, failures (with cf_* potential outcomes), bank_hourly, incidents"
+    pii_status: none
+    allowed_use: [research, internal_eval, commercial_training]
+    version: "1.1 (2026-09-28: partial-degradation incidents, CRM proxies)"
+    notes: "Never reported as production performance. Every artefact carries source=recursim."
+
+  - dataset_id: razorpay-test-mode
+    class: sandbox
+    source: "Razorpay test mode via tenant test keys"
+    license: "Razorpay terms"
+    collection_date: "live"
+    schema: "provider payments, links, webhooks"
+    pii_status: test_data_only
+    allowed_use: [internal_eval]
+    version: "api v1"
+    notes: "Contract/integration testing only. Test mode payment-link quota = 30 (observed)."
+
+  - dataset_id: kkbox-churn-wsdm2018
+    class: research
+    source: "https://www.kaggle.com/c/kkbox-churn-prediction-challenge"
+    license: "Kaggle competition rules (research use)"
+    collection_date: "2017"
+    schema: "members, transactions (auto_renew, cancel), user_logs"
+    pii_status: anonymised
+    allowed_use: [research]
+    version: "v2"
+    notes: "Method development for M6 only. NOT for commercial model training. Not yet downloaded."
+
+  - dataset_id: criteo-uplift-v2.1
+    class: research
+    source: "https://huggingface.co/datasets/criteo/criteo-uplift"
+    license: "CC BY-NC-SA 4.0"
+    collection_date: "2018-2020"
+    schema: "f0..f11, treatment, conversion, visit, exposure"
+    pii_status: anonymised
+    allowed_use: [research]
+    version: "2.1"
+    notes: "Non-commercial: uplift METHOD sanity checks only; no weights from it may ship. Not yet downloaded."
+
+  - dataset_id: npci-upi-statistics
+    class: research
+    source: "https://www.npci.org.in/what-we-do/upi/upi-ecosystem-statistics"
+    license: "public web page (terms UNVERIFIED)"
+    collection_date: "monthly"
+    schema: "bank-wise technical/business decline percentages"
+    pii_status: none
+    allowed_use: [research, internal_eval]
+    version: "n/a"
+    notes: "Priors for bank-health simulation calibration. Aggregates only."

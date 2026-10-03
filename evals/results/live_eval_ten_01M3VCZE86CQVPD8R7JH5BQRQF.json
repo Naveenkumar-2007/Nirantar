@@ -1,0 +1,13 @@
+{
+  "tenant_id": "ten_01M3VCZE86CQVPD8R7JH5BQRQF",
+  "model": "m1_debit_failure",
+  "n_labelled": 1,
+  "data_source": "live_tenant",
+  "brier": 0.7224999999999999,
+  "mean_predicted": 0.15,
+  "observed_rate": 1.0,
+  "model_versions": [
+    "prior-v1"
+  ],
+  "note": "too few labels for reliable metrics"
+}

@@ -1,0 +1,107 @@
+name: nirantar
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped   # come back after Docker Desktop restarts
+    environment:
+      POSTGRES_USER: nirantar_owner
+      POSTGRES_PASSWORD: nirantar_owner
+      POSTGRES_DB: nirantar
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak}   # used once by postgres-init/03-keycloak.sh
+    ports: ["25432:5432"]   # host 5432 is taken by a native Postgres on this machine
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/compose/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nirantar_owner -d nirantar"]
+      interval: 5s
+      retries: 20
+
+  # Identity provider (OIDC) for the dashboard and API — Keycloak, realm configured as code (infra/keycloak).
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.0
+    restart: unless-stopped
+    command: ["start-dev", "--import-realm", "--http-port=8080"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak}
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD in .env}
+      KC_HOSTNAME: http://localhost:18180
+      KC_HEALTH_ENABLED: "true"
+      NIRANTAR_DASHBOARD_URL: ${NIRANTAR_DASHBOARD_URL:-http://localhost:3010}
+      NIRANTAR_DASHBOARD_CLIENT_SECRET: ${NIRANTAR_DASHBOARD_CLIENT_SECRET:?set NIRANTAR_DASHBOARD_CLIENT_SECRET in .env}
+      NIRANTAR_E2E_CLIENT_SECRET: ${NIRANTAR_E2E_CLIENT_SECRET:-disabled}
+      NIRANTAR_E2E_CLIENT_ENABLED: ${NIRANTAR_E2E_CLIENT_ENABLED:-false}
+    ports: ["18180:8080"]
+    volumes:
+      - ./infra/keycloak:/opt/keycloak/data/import:ro
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped   # come back after Docker Desktop restarts
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 20
+
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    restart: unless-stopped   # come back after Docker Desktop restarts
+    command:
+      - redpanda start
+      - --smp 1
+      - --memory 1G
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+    ports: ["19092:19092"]
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 5s
+      retries: 30
+
+  temporal:
+    image: temporalio/auto-setup:1.25.2
+    restart: unless-stopped   # come back after Docker Desktop restarts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: nirantar_owner
+      POSTGRES_PWD: nirantar_owner
+      POSTGRES_SEEDS: postgres
+    ports: ["7233:7233"]
+
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    restart: unless-stopped   # come back after Docker Desktop restarts
+    depends_on: [temporal]
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    ports: ["8233:8080"]
+
+  # S3-compatible object store (evidence, recordings, datasets, model artefacts).
+  # MinIO no longer publishes public images; SeaweedFS exposes the S3 API. See ADR-0002.
+  objectstore:
+    image: chrislusf/seaweedfs:latest
+    restart: unless-stopped   # come back after Docker Desktop restarts
+    command: server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json
+    ports: ["8333:8333"]
+    volumes:
+      - objdata:/data
+      - ./infra/compose/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+
+volumes:
+  pgdata:
+  objdata:

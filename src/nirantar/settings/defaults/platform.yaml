@@ -1,0 +1,98 @@
+# Platform defaults for per-tenant settings (P1, ADR-0011).
+#
+# These are the STARTING values a new tenant gets. They are not facts:
+#   - every tenant can change them in Automations → Settings (versioned + audited), and
+#   - values marked `learned` are replaced by estimates from the tenant's own verified outcomes
+#     once enough evidence exists (nirantar.settings.learning).
+# Regulatory limits are NOT here: they live in docs/compliance/policies.yaml and TenantPolicyConfig,
+# and a tenant can only tighten them (namespace `policy`).
+version: "2026-09-29.1"
+
+namespaces:
+  channels:
+    # Optional contacts the Contact Arbiter may assign per decision round.
+    # Voice stays 0 until a telephony provider is connected AND the tenant's TRAI header is registered.
+    capacity_per_round: {whatsapp: 1000, voice: 0}
+    # Cost of one contact in paise. Set these to YOUR provider's rates (WhatsApp utility template,
+    # per-minute voice). Defaults are rough placeholders, shown as such in the UI.
+    cost_minor: {whatsapp: 100, voice: 800}
+
+  strategy:
+    risk_threshold:
+      mode: learned                 # learned | fixed
+      fixed: 0.35                   # used when mode=fixed or while evidence is insufficient
+      min_labels: 500               # verified debit outcomes with an M1 prediction
+      min_positives: 50             # of which failed
+      # Cost-sensitive choice: flagging a debit costs `flag_cost_minor` (enhanced notice / follow-up);
+      # a correctly flagged failure saves `prevention_share` of its amount. prevention_share is an
+      # assumption until a pre-debit experiment measures it.
+      flag_cost_minor: 100
+      prevention_share: 0.05
+
+  effects:
+    mode: learned                   # learned | prior
+    prior_strength: 50              # prior counts as this many observations when shrinking estimates
+    min_per_group: 30               # min treated AND holdout outcomes per failure category
+    # Assumed incremental recovery probability per failure category and channel (starting prior only).
+    prior:
+      BANK_TECHNICAL: {whatsapp: 0.0, voice: 0.0}
+      INSUFFICIENT_FUNDS: {whatsapp: 0.06, voice: 0.12}
+      MANDATE_REVOKED: {whatsapp: 0.25, voice: 0.35}
+      CARD_EXPIRED: {whatsapp: 0.25, voice: 0.35}
+      LIMIT_EXCEEDED: {whatsapp: 0.07, voice: 0.15}
+      UNKNOWN: {whatsapp: 0.05, voice: 0.08}
+
+  experiments:
+    holdout_bp: 800                 # 8% (brief default range 5-10%); lending tenants: 0 unless opted in
+    holdout_opt_in: false           # required for lending/MFI tenants to run any holdout (ADR-0004 d)
+
+  policy: {}                        # tenant tightenings of TenantPolicyConfig (windows, fatigue, approvals)
+
+  retention:
+    # Discount rate for lifetime value (CLV). A business setting (cost of capital), not a fact; 12%/yr default.
+    annual_discount_rate: 0.12
+    winback:
+      holdout_bp: 1000              # 10% of eligible churned subscribers get nothing: measures what win-back adds
+      window_days: 30               # an offer is valid, and reactivation counted, for this long
+      min_days_since_churn: 3
+      max_days_since_churn: 60
+      max_offers_per_customer_90d: 1
+      daily_capacity: 200           # win-back conversations started per day
+      # (discount approval threshold lives in `policy`: discount_approval_above_minor — maker-checker)
+      # Arms are randomised among eligible subscribers (plus the holdout). Offer text comes from the template
+      # registry; the discounted amount is computed by code from the subscription amount.
+      offers:
+        - {id: reminder, kind: reminder, discount_pct: 0}
+        - {id: pct10, kind: discount_pct, discount_pct: 10}
+        - {id: pct25, kind: discount_pct, discount_pct: 25}
+    at_risk:
+      # "At risk" is RELATIVE to this business: churn probability at least `min_lift_over_average` × the average
+      # of its active subscribers, and at least the absolute floor. (An absolute 30% flags nobody at ~5%/month.)
+      min_churn_probability: 0.05
+      min_lift_over_average: 2.0
+
+  operations:
+    debit_cycle:
+      notice_days: 3                # pre-debit notice T-3 (RBI e-mandate requires >= 24 h; 3 days is common practice)
+      debit_time_local: "10:00"     # when the provider executes the debit on its scheduled date, merchant local time
+      timezone: Asia/Kolkata
+      payment_wait_hours: 36        # no payment webhook by then → pull the truth from the provider
+      recovery_window_days: 7
+      round_gap_days: 3
+      max_contact_rounds: 2
+    disputes:
+      # Contest automatically only when the verified evidence gives at least this win probability; otherwise a
+      # human decides (accepting a chargeback is never automatic). Replaced by M11 once it has labels.
+      min_win_probability: 0.5
+    mandate_health:
+      lookahead_days: 10            # mandates behind debits due in the next 10 days are checked daily
+      expiry_warn_days: 30          # a mandate/card validity ending within 30 days needs re-authorisation
+      repair_wait_days: 5           # a repair case waits this long for the customer before closing as unrepaired
+      link_valid_days: 7            # re-authorisation link lifetime
+
+# Feature-store constants that are ASSUMPTIONS (not sourced facts). Changing one changes feature values, so it
+# requires a new feature-set version (features/definitions.py VERSION).
+ml:
+  # Base first-attempt failure rate used ONLY while a tenant has no attempts in the last 30 days (cold start).
+  # Replaced by the tenant's own rate as soon as it has data. No verified industry source; engineering assumption.
+  cold_start_failure_rate: 0.15

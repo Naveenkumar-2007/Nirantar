@@ -1,0 +1,136 @@
+[project]
+name = "nirantar"
+version = "0.1.0"
+description = "Autonomous recurring-revenue operating system (orchestration/recovery platform integrating licensed payment providers)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "pydantic>=2.8",
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "sqlalchemy>=2.0.32",
+  "alembic>=1.13",
+  "psycopg[binary]>=3.2",
+  "redis>=5.0",
+  "httpx>=0.27",
+  "pyyaml>=6.0",
+  "tzdata>=2024.1",
+  "structlog>=24.4",
+  "opentelemetry-api>=1.27",
+  "opentelemetry-sdk>=1.27",
+  "cryptography>=43",
+  "temporalio>=1.33.0",
+  "langgraph>=1.2.12",
+  "mcp>=2.2.0",
+  "fastembed>=0.8.1",
+  "rapidocr-onnxruntime>=1.4.4",
+  "pillow>=12.3.0",
+  "boto3>=1.43.103",
+  "reportlab>=4.2",
+  "a2a-sdk[fastapi]>=1.2",
+]
+
+[project.optional-dependencies]
+events = ["confluent-kafka>=2.5"]
+workflows = ["temporalio>=1.7"]
+ml = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scikit-learn>=1.5",
+    "lightgbm>=4.5",
+    "mlflow>=2.16",
+    "ortools>=9.10",
+    "evidently>=0.7",
+]
+data = [
+    "dagster>=1.9",
+    "dagster-webserver>=1.9",
+    "duckdb>=1.1",
+    "pandera>=0.22",
+    "pyiceberg[pyarrow,sql-postgres]>=0.9",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "hypothesis>=6.112",
+  "ruff>=0.6",
+  "mypy>=1.11",
+  "import-linter>=2.1",
+  "pandas-stubs>=3.0.5.260914",
+  "types-pyyaml>=6.0.12.20260906",
+]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nirantar"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q --strict-markers"
+markers = [
+  "integration: needs docker compose services",
+  "sandbox: needs real provider sandbox credentials",
+  "soak: long-running services soak (NIRANTAR_SOAK=1)",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "DTZ", "RUF"]
+ignore = ["S101", "RUF001", "RUF002", "RUF003"]  # Indic scripts and typographic dashes are intentional
+
+[tool.ruff.lint.per-file-ignores]
+"src/nirantar/db/migrations/versions/*" = ["E501", "S608"]
+"tests/**" = ["E501", "S105", "S106", "S311"]
+# FastAPI resolves Depends(...) in parameter defaults by design.
+"src/nirantar/api/*" = ["B008"]
+# queries.py: SQL fragments come only from _cursor_clause/fixed constants; every value is a bound parameter.
+"src/nirantar/api/queries.py" = ["B008", "S608"]
+# Demo seeding simulates customer behaviour (not crypto) with a demo-only webhook secret.
+"src/nirantar/demo/*" = ["S311", "S106"]
+# Simulator/features work in naive local (IST) simulation time by design; S311: simulation RNG, not crypto.
+"src/nirantar/ml/*" = ["DTZ001", "DTZ005", "DTZ011", "S311", "RUF001", "RUF002", "RUF003", "E501"]
+"src/nirantar/ml/models/*" = ["RUF001", "RUF002", "RUF003", "E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["nirantar"]
+mypy_path = "src"
+
+# Third-party libraries without type information.
+[[tool.mypy.overrides]]
+module = ["sklearn.*", "lightgbm.*", "scipy.*", "mlflow.*", "confluent_kafka.*", "reportlab.*", "ortools.*", "boto3.*",
+          "rapidocr_onnxruntime.*", "fastembed.*", "pyarrow.*", "evidently.*"]
+ignore_missing_imports = true
+
+# ML numeric code (pandas/numpy-heavy) uses a narrower profile; covered by tests/ml runtime tests.
+# Money, tenancy, ledger, payments, security and contracts remain fully strict. See ADR-0006.
+[[tool.mypy.overrides]]
+module = ["nirantar.ml.recursim", "nirantar.ml.features", "nirantar.ml.models.*", "nirantar.ml.churn"]
+disable_error_code = ["operator", "union-attr", "index", "call-overload", "assignment", "arg-type", "misc",
+                      "no-any-return"]
+
+[tool.importlinter]
+root_package = "nirantar"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Foundation layers do not depend on domains, agents or services"
+type = "forbidden"
+source_modules = ["nirantar.core", "nirantar.contracts", "nirantar.ledger", "nirantar.audit"]
+forbidden_modules = ["nirantar.payments", "nirantar.agents", "nirantar.mcp", "nirantar.policy"]
+
+[[tool.importlinter.contracts]]
+name = "Agents never import provider adapters or the database directly (MCP is the action boundary)"
+type = "forbidden"
+source_modules = ["nirantar.agents"]
+forbidden_modules = ["nirantar.payments.providers", "nirantar.db", "sqlalchemy", "psycopg"]
+allow_indirect_imports = true

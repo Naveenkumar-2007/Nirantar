@@ -1,0 +1,123 @@
+{
+  "source": "sarvam live, synthetic TTS audio (clean, 8 kHz)",
+  "languages": {
+    "te": {
+      "mean_cer": 0.424,
+      "intent_agreement": 1.0,
+      "rows": [
+        {
+          "ref": "మీ చెల్లింపు పెండింగ్‌లో ఉంది",
+          "hyp": "మీ చెల్లింపు pending లో ఉంది.",
+          "cer": 0.636,
+          "tts_ms": 638,
+          "stt_ms": 244,
+          "audio_s": 1.45,
+          "intent_ref": "other",
+          "intent_hyp": "other"
+        },
+        {
+          "ref": "నేను రేపు జీతం వచ్చాక చెల్లిస్తాను",
+          "hyp": "నేను రేపు జీతం వచ్చాక చెల్లిస్తాను.",
+          "cer": 0.0,
+          "tts_ms": 989,
+          "stt_ms": 303,
+          "audio_s": 3.5,
+          "intent_ref": "promise_to_pay",
+          "intent_hyp": "promise_to_pay"
+        },
+        {
+          "ref": "లింక్ ఎస్ఎంఎస్‌లో పంపండి",
+          "hyp": "link SMS లో పంపండి.",
+          "cer": 0.636,
+          "tts_ms": 494,
+          "stt_ms": 227,
+          "audio_s": 1.54,
+          "intent_ref": "promise_to_pay",
+          "intent_hyp": "promise_to_pay"
+        }
+      ]
+    },
+    "hi": {
+      "mean_cer": 0.289,
+      "intent_agreement": 1.0,
+      "rows": [
+        {
+          "ref": "आपका भुगतान बाकी है",
+          "hyp": "आपका भुगतान बाकी है",
+          "cer": 0.0,
+          "tts_ms": 533,
+          "stt_ms": 225,
+          "audio_s": 1.54,
+          "intent_ref": "other",
+          "intent_hyp": "other"
+        },
+        {
+          "ref": "मैं कल सैलरी आने के बाद भुगतान करूंगा",
+          "hyp": "मैं कल salary आने के बाद भुगतान करूंगा।",
+          "cer": 0.333,
+          "tts_ms": 579,
+          "stt_ms": 266,
+          "audio_s": 1.88,
+          "intent_ref": "promise_to_pay",
+          "intent_hyp": "promise_to_pay"
+        },
+        {
+          "ref": "लिंक एसएमएस पर भेज दीजिए",
+          "hyp": "link SMS पर भेज दीजिए",
+          "cer": 0.533,
+          "tts_ms": 605,
+          "stt_ms": 223,
+          "audio_s": 1.88,
+          "intent_ref": "promise_to_pay",
+          "intent_hyp": "promise_to_pay"
+        }
+      ]
+    },
+    "en": {
+      "mean_cer": 0.045,
+      "intent_agreement": 1.0,
+      "rows": [
+        {
+          "ref": "your payment is pending",
+          "hyp": "your payment is pending",
+          "cer": 0.0,
+          "tts_ms": 478,
+          "stt_ms": 190,
+          "audio_s": 1.19,
+          "intent_ref": "other",
+          "intent_hyp": "other"
+        },
+        {
+          "ref": "i will pay tomorrow after my salary",
+          "hyp": "I will pay tomorrow after my salary.",
+          "cer": 0.0,
+          "tts_ms": 757,
+          "stt_ms": 238,
+          "audio_s": 1.62,
+          "intent_ref": "promise_to_pay",
+          "intent_hyp": "promise_to_pay"
+        },
+        {
+          "ref": "please send the link by sms",
+          "hyp": "Please send a link by SMS",
+          "cer": 0.136,
+          "tts_ms": 509,
+          "stt_ms": 225,
+          "audio_s": 1.54,
+          "intent_ref": "promise_to_pay",
+          "intent_hyp": "promise_to_pay"
+        }
+      ]
+    }
+  },
+  "caveat": "codemix mode writes English loanwords in Latin script (e.g. pending, salary, SMS); raw CER counts these as errors although the words are right. Intent accuracy is the task metric.",
+  "turn": {
+    "intent": "promise_to_pay",
+    "action": "send_link",
+    "stt_ms": 265,
+    "tts_ms": 1129,
+    "total_ms": 1395,
+    "target_ms": 1500,
+    "note": "non-streaming REST; streaming STT/TTS is the next latency step"
+  }
+}

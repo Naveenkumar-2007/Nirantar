@@ -1,0 +1,21 @@
+{
+  "ingest": {
+    "documents_added": 59,
+    "documents_unchanged": 0,
+    "chunks_added": 231
+  },
+  "k": 5,
+  "n_questions": 18,
+  "variants": {
+    "hybrid_rrf": {
+      "recall_at_k": 1.0,
+      "mrr": 0.9629629629629629,
+      "misses": []
+    },
+    "hybrid_rrf_rerank": {
+      "recall_at_k": 1.0,
+      "mrr": 0.9444444444444444,
+      "misses": []
+    }
+  }
+}

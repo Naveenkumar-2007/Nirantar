@@ -1,0 +1,49 @@
+# Offline promotion gates (BB-§20). A model version is registered as "champion"
+# only if every gate passes on the held-out TEST months. Thresholds are
+# configurable; changing them requires a PR that explains why.
+m1_debit_failure:
+  min_auc: 0.70
+  max_ece: 0.05
+  must_beat_baseline_on: [pr_auc, brier]
+m4_bank_health:
+  min_incident_recall: 0.70
+  max_false_alarms_per_bank_week: 2.0
+  max_median_detection_delay_hours: 2.0
+m5_uplift:
+  # ADR-0007: under the tenant's voice capacity, learned targeting must beat the amount heuristic
+  min_capacity_gain_vs_amount_heuristic: 0.0
+  min_policy_gain_vs_best_single_arm: 0.0
+m10_cash_forecast:
+  max_wape: 0.10
+  min_interval_coverage: 0.80                 # nominal 90% interval, allow some slack
+
+# Per-tenant M1 on the tenant's own data (P3, ADR-0013). Baseline = the cold-start prior model
+# (subscription's failure rate shrunk to the tenant rate): a trained model must beat it to exist at all.
+m1_debit_failure_tenant:
+  min_auc: 0.65
+  max_ece: 0.05
+  min_test_positives: 50
+  must_beat_baseline_on: [brier, pr_auc]
+
+# Churn models (P4, ADR-0014). Baselines are transparent: M6 → the tenant's sBG tenure model fitted only on data
+# known at the training cutoff; M13 → the calibrated payment-trouble rule. A learned model must beat them.
+m6_churn_tenant:
+  min_auc: 0.65
+  max_ece: 0.05
+  min_test_positives: 50
+  must_beat_baseline_on: [brier, pr_auc]
+m13_churn_type_tenant:
+  min_auc: 0.60
+  max_ece: 0.08
+  min_test_positives: 30
+  must_beat_baseline_on: [brier]
+
+# Online rollout: shadow → canary → champion on LIVE labelled outcomes, compared on the same debits (paired).
+rollout:
+  min_shadow_pairs: 200          # labelled predictions scored by both challenger and the decision model
+  min_canary_pairs: 200
+  canary_share: 0.2              # share of debits the canary decides, by stable hash of the subject
+  non_inferiority_brier: 0.002   # 95% upper bound of (challenger − incumbent) Brier must be ≤ this
+  max_live_ece: 0.08             # a champion above this on the last 500 labels is rolled back
+  retrain_drift_share: 0.3       # retrain when ≥ 30% of features drift (Evidently)
+  retrain_label_growth: 0.25     # …or when labelled cycles grew 25% since training

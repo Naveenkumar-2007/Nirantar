@@ -1,0 +1,793 @@
+"""Nirantar HTTP API.
+
+Run: uv run uvicorn nirantar.api.app:create_app --factory --port 8080
+Auth: `Authorization: Bearer nk_<tenant>.<key_id>.<secret>`; permissions via RBAC. Platform console routes
+use `X-Platform-Key` and a dedicated platform role for cross-tenant health (never tenant data contents).
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import hmac
+import json
+import logging
+import os
+import time
+import uuid
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Connection
+
+from nirantar.api import queries
+from nirantar.api.deps import (
+    Services,
+    current_identity,
+    default_services,
+    platform_admin,
+    require,
+    services,
+    tenant_conn,
+)
+from nirantar.approvals.service import ApprovalError, decide
+from nirantar.audit.chain import AuditChain
+from nirantar.core.clock import FixedClock
+from nirantar.core.ids import new_id
+from nirantar.db.session import tenant_tx
+from nirantar.db.stores import SqlAuditStore
+from nirantar.experiments.service import analyze
+from nirantar.mcp.gateway import ToolGateway
+from nirantar.payments.ingress import ingest_webhook
+from nirantar.policy.engine import TenantPolicyConfig
+from nirantar.security.oidc import Identity
+from nirantar.security.rbac import Permission, Principal
+from nirantar.settings import learning, templates
+from nirantar.settings import runtime as tenant_runtime
+from nirantar.settings import service as settings_service
+from nirantar.settings.schema import NAMESPACES
+
+REPO = Path(__file__).resolve().parents[3]
+MAX_LIMIT = 100
+
+
+class DecideIn(BaseModel):
+    grant: bool
+    note: str | None = None
+
+
+class AskIn(BaseModel):
+    question: str
+
+
+class BusinessIn(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    segment: str = Field(default="subscription",
+                         pattern=r"^(subscription|saas|edtech|media|fitness|insurance|lending|other)$")
+
+
+class PartnerIn(BaseModel):
+    name: str = Field(min_length=3, max_length=80)
+
+
+class ConsentIn(BaseModel):
+    approve: bool
+    scopes: list[str] | None = None
+
+
+class ReplayIn(BaseModel):
+    reason: str = Field(min_length=5, max_length=500)
+
+
+class SettingsIn(BaseModel):
+    value: dict[str, Any]
+    reason: str
+    expected_version: int
+
+
+class RetireIn(BaseModel):
+    reason: str
+
+
+class TemplateProposalIn(BaseModel):
+    key: str
+    language: str
+    body: str
+
+
+def _actor(p: Principal) -> str:
+    return f"{p.kind}:{p.principal_id}"
+
+
+def _policy_dict(cfg: TenantPolicyConfig) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for k, v in dataclasses.asdict(cfg).items():
+        out[k] = [t.strftime("%H:%M") for t in v] if k.endswith("_window") else v
+    return out
+
+
+def _json_default(o: Any) -> Any:
+    if isinstance(o, datetime):
+        return o.isoformat()
+    return str(o)
+
+
+class JSON(JSONResponse):
+    def render(self, content: Any) -> bytes:
+        return json.dumps(content, default=_json_default, ensure_ascii=False).encode()
+
+
+def approval_executor(s: Services) -> Any:
+    """One per app: approved actions run with the proposing agent's tools and the tenant's own provider."""
+    from nirantar.approvals.executor import ApprovalExecutor
+
+    ex = s.extra.get("approval_executor")
+    if ex is None:
+        ex = s.extra["approval_executor"] = ApprovalExecutor(s.engine, s.provider, s.comms)
+    return ex
+
+
+def create_app(svc: Services | None = None) -> FastAPI:
+    app = FastAPI(title="Nirantar API", version="0.1.0", default_response_class=JSON)
+    app.state.services = svc or default_services()
+    app.add_middleware(CORSMiddleware, allow_origins=os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(","),
+                       allow_methods=["GET", "POST", "PUT"], allow_headers=["Authorization", "Content-Type"])
+
+    @app.exception_handler(queries.BadCursor)
+    async def bad_cursor(_: Request, exc: queries.BadCursor) -> JSONResponse:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    @app.middleware("http")
+    async def request_id(request: Request, call_next: Any) -> Any:
+        rid = request.headers.get("x-request-id") or uuid.uuid4().hex
+        t0 = time.perf_counter()
+        response = await call_next(request)
+        response.headers["x-request-id"] = rid
+        response.headers["x-response-ms"] = str(int((time.perf_counter() - t0) * 1000))
+        return response
+
+    @app.get("/health")
+    def health(s: Services = Depends(services)) -> dict[str, Any]:
+        try:
+            with s.engine.connect() as c:
+                c.execute(text("select 1"))
+            db = "ok"
+        except Exception as exc:  # health reports, never raises
+            db = f"error: {type(exc).__name__}"
+        return {"status": "ok" if db == "ok" else "degraded", "db": db}
+
+    # ------------------------------------------------------------- merchant API
+    @app.get("/v1/overview")
+    def overview(c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        return queries.overview(c, datetime.now(UTC))
+
+    @app.get("/v1/debits")
+    def debits(status: str | None = None, limit: int = Query(25, ge=1, le=MAX_LIMIT), cursor: str | None = None,
+               c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        return queries.debits(c, status, limit, cursor)
+
+    @app.get("/v1/debits/{debit_id}")
+    def debit_detail(debit_id: str, c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        d = queries.debit_detail(c, debit_id)
+        if d is None:
+            raise HTTPException(404, "debit not found")
+        return d
+
+    @app.get("/v1/customers")
+    def customers(limit: int = Query(25, ge=1, le=MAX_LIMIT), cursor: str | None = None,
+                  c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        return queries.customers(c, limit, cursor)
+
+    @app.get("/v1/agents/activity")
+    def activity(limit: int = Query(50, ge=1, le=MAX_LIMIT), cursor: str | None = None, agent: str | None = None,
+                 c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        return queries.agent_activity(c, limit, cursor, agent)
+
+    @app.get("/v1/approvals")
+    def approvals(status: str = "pending", c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        return {"items": queries.approvals(c, status)}
+
+    @app.post("/v1/approvals/{approval_id}/decide")
+    def decide_approval(approval_id: str, body: DecideIn,
+                        p: Principal = Depends(require(Permission.APPROVALS_DECIDE)),
+                        s: Services = Depends(services)) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        with tenant_tx(p.tenant_id, s.engine) as c:
+            try:
+                token = decide(c, p, approval_id, body.grant, now)
+            except ApprovalError as exc:
+                raise HTTPException(409, str(exc)) from exc
+            action = c.execute(text("SELECT x.agent_id, x.tool_name, x.params, x.case_id, x.idempotency_key FROM "
+                                    "ops.approvals a JOIN ops.actions x ON x.tenant_id=a.tenant_id AND "
+                                    "x.action_id=a.action_id WHERE a.approval_id=:a"), {"a": approval_id}).one()
+        if token is None:
+            return {"approval_id": approval_id, "status": "denied"}
+        # a test/demo may inject a ready gateway for Nirantar's own agents; otherwise the approval executor builds
+        # the proposing agent's own tool set with the tenant's real provider account
+        injected: ToolGateway | None = s.extra.get("gateway")
+        internal = not action.agent_id.startswith(("mcp_client:", "a2a_partner:"))
+        gateway = injected if injected is not None and internal else approval_executor(s).gateway(p.tenant_id,
+                                                                                                  action.agent_id)
+        result = gateway.call(tenant_id=p.tenant_id, agent_id=action.agent_id, tool_name=action.tool_name,
+                              args=dict(action.params), case_id=action.case_id, approval_token=token,
+                              idempotency_key=action.idempotency_key)
+        return {"approval_id": approval_id, "status": "granted", "executed": result.status == "executed",
+                "action_status": result.status, "output": result.output}
+
+    @app.get("/v1/experiments/{experiment_id}")
+    def experiment(experiment_id: str, p: Principal = Depends(require(Permission.READ)),
+                   c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        return analyze(c, p.tenant_id, experiment_id)
+
+    @app.get("/v1/compliance")
+    def compliance(days: int = Query(30, ge=1, le=365), c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        return queries.compliance(c, datetime.now(UTC) - timedelta(days=days))
+
+    @app.get("/v1/compliance/policies")
+    def policies(_: Principal = Depends(require(Permission.READ))) -> dict[str, Any]:
+        import yaml
+
+        out = []
+        for f in ("policies.yaml", "internal-policies.yaml"):
+            data = yaml.safe_load((REPO / "docs" / "compliance" / f).read_text(encoding="utf-8"))
+            recs = data["policies"] if isinstance(data, dict) else data
+            out += [{"policy_id": r["policy_id"], "rule": r.get("rule"), "effective_date": r.get("effective_date"),
+                     "status": r.get("verification_status", "governance"),
+                     "source": r["source"].get("title") if isinstance(r.get("source"), dict) else r.get("source")}
+                    for r in recs]
+        return {"items": out}
+
+    @app.get("/v1/audit")
+    def audit(limit: int = Query(50, ge=1, le=MAX_LIMIT), p: Principal = Depends(require(Permission.AUDIT_READ)),
+              c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        return {"items": queries.audit(c, limit)}
+
+    @app.get("/v1/audit/verify")
+    def audit_verify(p: Principal = Depends(require(Permission.AUDIT_READ)),
+                     c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        try:
+            return {"valid": True, "records": AuditChain(SqlAuditStore(c)).verify(p.tenant_id)}
+        except Exception as exc:  # a broken chain is a finding to report, not a server error
+            return {"valid": False, "error": str(exc)}
+
+    @app.get("/v1/models")
+    def models(_: Principal = Depends(require(Permission.READ))) -> dict[str, Any]:
+        f = REPO / "evals" / "results" / "ml_latest.json"
+        rag = REPO / "evals" / "results" / "rag_latest.json"
+        voice = REPO / "evals" / "results" / "voice_latest.json"
+        def load(p: Path) -> Any:
+            return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+        return {"ml": load(f), "rag": load(rag), "voice": load(voice)}
+
+    @app.post("/v1/assistant/ask")
+    def ask(body: AskIn, p: Principal = Depends(require(Permission.READ)),
+            s: Services = Depends(services)) -> dict[str, Any]:
+        from nirantar.rag.answer import answer
+        from nirantar.rag.store import retrieve
+
+        if s.llm is None:
+            raise HTTPException(503, "assistant unavailable: no LLM configured")
+        with tenant_tx(p.tenant_id, s.engine) as c:
+            hits = retrieve(c, body.question, k=5)
+        res = answer(body.question, hits, s.llm)
+        return {"status": res.status, "answer": res.answer, "citations": res.citations,
+                "rejected_citations": res.rejected_citations}
+
+    # ------------------------------------------------------------- tenant configuration (ADR-0011)
+    @app.get("/v1/settings")
+    def get_settings(p: Principal = Depends(require(Permission.READ)),
+                     c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        rt = tenant_runtime.load(c, p.tenant_id)
+        return {"namespaces": settings_service.all_settings(c, p.tenant_id),
+                "effective": {"risk_threshold": rt.risk_threshold, "capacity": rt.capacity,
+                              "effects": {k: dict(v) for k, v in rt.priors.effects.items()},
+                              "cost_minor": dict(rt.priors.cost_minor), "sources": rt.sources,
+                              "policy": _policy_dict(rt.policy)},
+                "policy_platform": _policy_dict(TenantPolicyConfig()),
+                "can_edit": p.can(Permission.POLICY_ADMIN)}
+
+    @app.get("/v1/settings/{namespace}/history")
+    def settings_history(namespace: str, c: Connection = Depends(tenant_conn),
+                         p: Principal = Depends(require(Permission.READ))) -> dict[str, Any]:
+        if namespace not in NAMESPACES:
+            raise HTTPException(404, "unknown namespace")
+        return {"items": settings_service.history(c, p.tenant_id, namespace)}
+
+    @app.put("/v1/settings/{namespace}")
+    def put_settings(namespace: str, body: SettingsIn, p: Principal = Depends(require(Permission.POLICY_ADMIN)),
+                     s: Services = Depends(services)) -> dict[str, Any]:
+        if namespace not in NAMESPACES:
+            raise HTTPException(404, "unknown namespace")
+        try:
+            with tenant_tx(p.tenant_id, s.engine) as c:
+                v = settings_service.update(c, p.tenant_id, namespace, body.value, actor=_actor(p),
+                                            reason=body.reason, now=datetime.now(UTC),
+                                            expected_version=body.expected_version)
+        except settings_service.SettingsConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except (ValueError, ValidationError) as exc:
+            raise HTTPException(422, str(exc)[:1000]) from exc
+        return v.as_dict()
+
+    # ------------------------------------------------------------ people and businesses (P8, ADR-0018)
+    @app.get("/v1/me")
+    def me(ident: Identity = Depends(current_identity)) -> dict[str, Any]:
+        return {"sub": ident.sub, "email": ident.email, "name": ident.name, "businesses": list(ident.memberships)}
+
+    @app.post("/v1/businesses")
+    def create_business(body: BusinessIn, ident: Identity = Depends(current_identity),
+                        s: Services = Depends(services)) -> dict[str, Any]:
+        """A signed-in person starts a business on Nirantar and becomes its owner."""
+        from nirantar.billing.service import create_tenant
+        from nirantar.core.ids import new_id
+        from nirantar.security.oidc import MAX_BUSINESSES_PER_USER, add_membership, count_owned
+
+        if count_owned(s.engine, ident.sub) >= MAX_BUSINESSES_PER_USER:
+            raise HTTPException(429, f"at most {MAX_BUSINESSES_PER_USER} businesses per person")
+        tenant, now = new_id("ten"), datetime.now(UTC)
+        with tenant_tx(tenant, s.engine) as c:
+            create_tenant(c, tenant, body.name, {"segments": [body.segment], "onboarding": {"status": "started"}})
+        add_membership(s.engine, ident.sub, tenant, ["owner"], invited_by=None)
+        with tenant_tx(tenant, s.engine) as c:
+            AuditChain(SqlAuditStore(c), FixedClock(now)).append(tenant, f"user:usr_{ident.sub}", "business.created",
+                                                                 {"name": body.name, "segment": body.segment})
+        return {"tenant_id": tenant, "name": body.name, "roles": ["owner"]}
+
+    # ------------------------------------------------------------ WhatsApp webhook (P6, ADR-0017)
+    @app.get("/webhooks/whatsapp")
+    def whatsapp_verify(request: Request) -> Any:
+        """Meta's subscription handshake: echo hub.challenge when the verify token matches."""
+        from fastapi.responses import PlainTextResponse
+
+        q = request.query_params
+        expected = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
+        if q.get("hub.mode") == "subscribe" and expected and hmac.compare_digest(q.get("hub.verify_token", ""),
+                                                                                 expected):
+            return PlainTextResponse(q.get("hub.challenge", ""))
+        raise HTTPException(403, "verification failed")
+
+    @app.post("/webhooks/whatsapp")
+    async def whatsapp_webhook(request: Request, s: Services = Depends(services)) -> dict[str, Any]:
+        """Signed by Meta (X-Hub-Signature-256 over the raw body). Processing is idempotent on message ids, so a 5xx
+        here simply makes Meta retry."""
+        import asyncio
+        import json as _json
+
+        from nirantar.channels.inbound import process_whatsapp
+        from nirantar.channels.whatsapp import verify_signature
+
+        raw = await request.body()
+        secret = os.environ.get("WHATSAPP_APP_SECRET", "")
+        if not secret or not verify_signature(secret, raw, request.headers.get("x-hub-signature-256")):
+            raise HTTPException(401, "bad signature")
+        ex = approval_executor(s)
+        sink = ex.comms
+        res = await asyncio.to_thread(
+            process_whatsapp, s.engine, _json.loads(raw), wa=getattr(sink, "whatsapp", None),
+            speech=getattr(sink, "speech", None), provider_for_tenant=lambda t: ex.services(t)["provider"])
+        return {"messages": res.messages, "statuses": res.statuses, "duplicates": res.duplicates,
+                "unmatched": res.unmatched}
+
+    # ------------------------------------------------------------ MCP connections (P7, ADR-0016)
+    def oauth_store(s: Services) -> Any:
+        from nirantar.mcp.oauth import OAuthStore
+
+        return OAuthStore(s.engine, consent_url="")
+
+    @app.get("/v1/mcp/requests/{request_id}")
+    def mcp_request(request_id: str, _: Principal = Depends(require(Permission.READ)),
+                    s: Services = Depends(services)) -> dict[str, Any]:
+        from nirantar.mcp.oauth import ConsentError
+
+        try:
+            out: dict[str, Any] = oauth_store(s).describe_request(request_id)
+        except ConsentError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return out
+
+    @app.post("/v1/mcp/requests/{request_id}/decide")
+    def mcp_decide(request_id: str, body: ConsentIn, p: Principal = Depends(require(Permission.TENANT_ADMIN)),
+                   s: Services = Depends(services)) -> dict[str, Any]:
+        """A tenant admin connects (or refuses) an MCP client. Returns where to send the browser back to."""
+        from nirantar.mcp.oauth import ConsentError
+
+        store = oauth_store(s)
+        try:
+            req = store.describe_request(request_id)
+            url = store.decide(p, request_id, approve=body.approve, scopes=body.scopes)
+        except ConsentError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        now = datetime.now(UTC)
+        with tenant_tx(p.tenant_id, s.engine) as c:
+            AuditChain(SqlAuditStore(c), FixedClock(now)).append(
+                p.tenant_id, _actor(p), "mcp.connected" if body.approve else "mcp.refused",
+                {"client_id": req["client_id"], "client_name": req["client_name"],
+                 "scopes": [x for x in (body.scopes or req["scopes"]) if x in req["scopes"]] if body.approve else []})
+        return {"redirect_url": url}
+
+    @app.get("/v1/mcp/grants")
+    def mcp_grants(p: Principal = Depends(require(Permission.READ)), s: Services = Depends(services)
+                   ) -> dict[str, Any]:
+        return {"items": oauth_store(s).list_grants(p.tenant_id)}
+
+    @app.delete("/v1/mcp/grants/{grant_id}")
+    def mcp_revoke(grant_id: str, p: Principal = Depends(require(Permission.TENANT_ADMIN)),
+                   s: Services = Depends(services)) -> dict[str, Any]:
+        if not oauth_store(s).revoke_grant(p.tenant_id, grant_id, f"revoked by {_actor(p)}"):
+            raise HTTPException(404, "no active connection with this id")
+        now = datetime.now(UTC)
+        with tenant_tx(p.tenant_id, s.engine) as c:
+            AuditChain(SqlAuditStore(c), FixedClock(now)).append(p.tenant_id, _actor(p), "mcp.revoked",
+                                                                 {"grant_id": grant_id})
+        return {"grant_id": grant_id, "revoked": True}
+
+    # ------------------------------------------------------------ A2A partners (P7, ADR-0016)
+    @app.post("/v1/a2a/partners")
+    def a2a_add_partner(body: PartnerIn, p: Principal = Depends(require(Permission.TENANT_ADMIN)),
+                        s: Services = Depends(services)) -> dict[str, Any]:
+        """Register an external agent (e.g. a customer's AI agent) that may call this tenant over A2A. The key is
+        shown once."""
+        from nirantar.security.keys import create_principal, issue_api_key
+
+        pid = create_principal(s.engine, p.tenant_id, body.name, "service", ["a2a_partner"])
+        key = issue_api_key(s.engine, p.tenant_id, pid)
+        now = datetime.now(UTC)
+        with tenant_tx(p.tenant_id, s.engine) as c:
+            AuditChain(SqlAuditStore(c), FixedClock(now)).append(p.tenant_id, _actor(p), "a2a.partner_added",
+                                                                 {"principal_id": pid, "name": body.name})
+        base = os.environ.get("NIRANTAR_PUBLIC_URL", "http://localhost:18080")
+        return {"principal_id": pid, "key": key.plaintext, "endpoint": f"{base}/a2a",
+                "agent_card": f"{base}/a2a/tenants/{p.tenant_id}/agent-card.json"}
+
+    @app.get("/v1/a2a/partners")
+    def a2a_partners(c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        rows = c.execute(text("SELECT p.principal_id, p.name, p.status, p.created_at, "
+                              "max(k.last_used_at) AS last_used_at, (SELECT count(*) FROM ops.a2a_tasks t "
+                              "WHERE t.counterparty='a2a_partner:' || "
+                              "p.principal_id) AS tasks FROM core.principals p LEFT JOIN core.api_keys k ON "
+                              "k.tenant_id=p.tenant_id AND k.principal_id=p.principal_id WHERE 'a2a_partner' = "
+                              "ANY(p.roles) GROUP BY p.principal_id, p.name, p.status, p.created_at "
+                              "ORDER BY p.created_at DESC")).all()
+        return {"items": [dict(r._mapping) for r in rows]}
+
+    @app.delete("/v1/a2a/partners/{principal_id}")
+    def a2a_remove_partner(principal_id: str, p: Principal = Depends(require(Permission.TENANT_ADMIN)),
+                           s: Services = Depends(services)) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        with tenant_tx(p.tenant_id, s.engine) as c:
+            n = c.execute(text("UPDATE core.principals SET status='disabled' WHERE principal_id=:p AND "
+                               "'a2a_partner' = ANY(roles) AND status='active'"), {"p": principal_id}).rowcount
+            if n != 1:
+                raise HTTPException(404, "no active A2A partner with this id")
+            AuditChain(SqlAuditStore(c), FixedClock(now)).append(p.tenant_id, _actor(p), "a2a.partner_removed",
+                                                                 {"principal_id": principal_id})
+        return {"principal_id": principal_id, "disabled": True}
+
+    @app.get("/v1/events/dead-letters")
+    def tenant_dead_letters(p: Principal = Depends(require(Permission.READ)),
+                            c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        rows = c.execute(text("SELECT event_id, consumer, event_type, error, attempts, created_at, replayed_at FROM "
+                              "events.consumer_dead_letters ORDER BY created_at DESC LIMIT 200")).all()
+        return {"items": [dict(r._mapping) for r in rows]}
+
+    @app.post("/v1/events/dead-letters/{event_id}/replay")
+    def replay_dead_letter(event_id: str, body: ReplayIn, p: Principal = Depends(require(Permission.AGENTS_OPERATE)),
+                           s: Services = Depends(services)) -> dict[str, Any]:
+        """Re-deliver a dead-lettered event after its cause is fixed: the relay republishes the original outbox row
+        and the consumers handle it again (idempotently). Audited."""
+        now = datetime.now(UTC)
+        with tenant_tx(p.tenant_id, s.engine) as c:
+            dl = c.execute(text("SELECT consumer, event_type FROM events.consumer_dead_letters WHERE event_id=:e AND "
+                                "replayed_at IS NULL"), {"e": event_id}).one_or_none()
+            if dl is None:
+                raise HTTPException(404, "no un-replayed dead letter with this event id")
+            n = c.execute(text("UPDATE events.outbox SET published_at=NULL WHERE tenant_id=:t AND event_id=:e"),
+                          {"t": p.tenant_id, "e": event_id}).rowcount
+            if n != 1:
+                raise HTTPException(409, "the original event is no longer in the outbox")
+            c.execute(text("UPDATE events.consumer_dead_letters SET replayed_at=:n WHERE event_id=:e"),
+                      {"n": now, "e": event_id})
+            AuditChain(SqlAuditStore(c), FixedClock(now)).append(p.tenant_id, _actor(p), "event.replayed", {
+                "event_id": event_id, "event_type": dl.event_type, "consumer": dl.consumer, "reason": body.reason})
+        return {"event_id": event_id, "replayed_at": now}
+
+    @app.get("/v1/learned")
+    def get_learned(p: Principal = Depends(require(Permission.READ)),
+                    c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for name in ("effects", "risk_threshold"):
+            lv = learning.latest(c, p.tenant_id, name)
+            out[name] = None if lv is None else {"version": lv.version, "value": lv.value, "evidence": lv.evidence,
+                                                 "created_at": lv.created_at}
+        return out
+
+    @app.post("/v1/learned/refresh")
+    def refresh_learned(p: Principal = Depends(require(Permission.POLICY_ADMIN)),
+                        s: Services = Depends(services)) -> dict[str, Any]:
+        with tenant_tx(p.tenant_id, s.engine) as c:
+            return learning.refresh(c, p.tenant_id, datetime.now(UTC))
+
+    @app.get("/v1/templates")
+    def list_templates(p: Principal = Depends(require(Permission.READ)),
+                       c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        return {"items": templates.catalogue(c, p.tenant_id), "can_propose": p.can(Permission.POLICY_ADMIN),
+                "can_review": p.can(Permission.APPROVALS_DECIDE), "me": _actor(p)}
+
+    @app.post("/v1/templates")
+    def propose_template(body: TemplateProposalIn, p: Principal = Depends(require(Permission.POLICY_ADMIN)),
+                         s: Services = Depends(services)) -> dict[str, Any]:
+        try:
+            with tenant_tx(p.tenant_id, s.engine) as c:
+                return templates.propose(c, p.tenant_id, body.key, body.language, body.body, actor=_actor(p),
+                                         now=datetime.now(UTC))
+        except templates.TemplateRejected as exc:
+            raise HTTPException(422, {"problems": exc.problems}) from exc
+
+    @app.post("/v1/templates/{key}/{language}/{version}/decide")
+    def decide_template(key: str, language: str, version: int, body: DecideIn,
+                        p: Principal = Depends(require(Permission.APPROVALS_DECIDE)),
+                        s: Services = Depends(services)) -> dict[str, Any]:
+        try:
+            with tenant_tx(p.tenant_id, s.engine) as c:
+                return templates.decide(c, p.tenant_id, key, language, version, approver=_actor(p),
+                                        approve=body.grant, now=datetime.now(UTC))
+        except templates.TemplateReviewError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except templates.TemplateRejected as exc:
+            raise HTTPException(422, {"problems": exc.problems}) from exc
+
+    # ------------------------------------------------------------- data platform (ADR-0012)
+    @app.get("/v1/data/health")
+    def data_health(p: Principal = Depends(require(Permission.READ)),
+                    c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        row = c.execute(text("SELECT report, computed_at, run_id FROM ai.data_health WHERE tenant_id=:t "
+                             "ORDER BY computed_at DESC, run_id DESC LIMIT 1"), {"t": p.tenant_id}).one_or_none()
+        return {"report": None if row is None else row.report, "run_id": None if row is None else row.run_id}
+
+    @app.get("/v1/data/runs")
+    def data_runs(limit: int = Query(20, ge=1, le=MAX_LIMIT), p: Principal = Depends(require(Permission.READ)),
+                  c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        rows = c.execute(text("SELECT run_id, trigger, status, error, started_at, finished_at, "
+                              "(SELECT coalesce(jsonb_agg(jsonb_build_object('step', s->>'step', 'ms', s->'ms')), "
+                              "'[]'::jsonb) FROM jsonb_array_elements(steps) s) AS steps "
+                              "FROM ingest.pipeline_runs WHERE tenant_id=:t ORDER BY started_at DESC LIMIT :l"),
+                         {"t": p.tenant_id, "l": limit}).all()
+        return {"items": [dict(r._mapping) for r in rows]}
+
+    @app.post("/v1/data/sync", status_code=202)
+    def data_sync(background: BackgroundTasks, p: Principal = Depends(require(Permission.INTEGRATIONS_ADMIN)),
+                  s: Services = Depends(services)) -> dict[str, Any]:
+        try:
+            from nirantar.data.lake import Lake
+            from nirantar.data.pipeline import run_tenant
+        except ImportError as exc:     # the `data` extra is not installed in this deployment
+            raise HTTPException(503, "data platform not installed (uv sync --extra data)") from exc
+        run_id = new_id("run")
+
+        def job() -> None:
+            try:
+                run_tenant(s.engine, s.extra.get("lake") or Lake.from_env(), p.tenant_id,
+                           now=datetime.now(UTC), trigger="manual", run_id=run_id)
+            except Exception:  # the pipeline marks the run failed with the reason; also log the traceback
+                logging.getLogger("nirantar.data").exception("data sync %s failed for %s", run_id, p.tenant_id)
+
+        background.add_task(job)
+        return {"run_id": run_id, "status": "queued"}
+
+    # ------------------------------------------------------------- per-tenant ML (ADR-0013)
+    @app.get("/v1/ml/models")
+    def tenant_models(p: Principal = Depends(require(Permission.READ)),
+                      c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        versions = [dict(r._mapping) for r in c.execute(text(
+            "SELECT version, stage, algorithm, feature_set, data_source, metrics, baseline, gates, training, "
+            "canary_share, trained_at, stage_changed_at FROM ai.model_versions WHERE tenant_id=:t "
+            "AND model_name='m1_debit_failure' ORDER BY trained_at DESC LIMIT 50"), {"t": p.tenant_id})]
+        events = [dict(r._mapping) for r in c.execute(text(
+            "SELECT version, from_stage, to_stage, reason, actor, at FROM ai.model_events WHERE tenant_id=:t "
+            "ORDER BY at DESC LIMIT 50"), {"t": p.tenant_id})]
+        monitoring = c.execute(text("SELECT report FROM ai.model_monitoring WHERE tenant_id=:t "
+                                    "AND model_name='m1_debit_failure' ORDER BY computed_at DESC LIMIT 1"),
+                               {"t": p.tenant_id}).scalar_one_or_none()
+        health_row: Any = c.execute(text("SELECT report FROM ai.data_health WHERE tenant_id=:t "
+                                    "ORDER BY computed_at DESC, run_id DESC LIMIT 1"), {"t": p.tenant_id}
+                               ).scalar_one_or_none()
+        served: dict[str, int] = dict(c.execute(text(
+            "SELECT coalesce(output->>'served_by', 'unknown'), count(*) FROM ai.predictions WHERE tenant_id=:t "
+            "AND model_name='m1_debit_failure' AND output->>'role'='decision' AND predicted_at > now() - "
+            "interval '30 days' GROUP BY 1"), {"t": p.tenant_id}).all())
+        return {"model": "m1_debit_failure", "versions": versions, "events": events, "monitoring": monitoring,
+                "readiness": (health_row if isinstance(health_row, dict) else {}).get("readiness", {})
+                .get("m1_debit_failure"),
+                "served_30d": served, "can_manage": p.can(Permission.POLICY_ADMIN)}
+
+    @app.post("/v1/ml/models/{version}/retire")
+    def retire_model(version: str, body: RetireIn, p: Principal = Depends(require(Permission.POLICY_ADMIN)),
+                     s: Services = Depends(services)) -> dict[str, Any]:
+        from nirantar.ml.rollout import manual_rollback
+
+        try:
+            return manual_rollback(s.engine, p.tenant_id, version, reason=body.reason, actor=_actor(p),
+                                   now=datetime.now(UTC))
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/v1/ml/train", status_code=202)
+    def train_now(background: BackgroundTasks, p: Principal = Depends(require(Permission.POLICY_ADMIN)),
+                  s: Services = Depends(services)) -> dict[str, Any]:
+        """Refresh features and train now (readiness still applies: no model on too little data)."""
+        try:
+            from nirantar.data.lake import Lake
+            from nirantar.features.offline import build_training_set
+            from nirantar.features.online import OnlineStore
+            from nirantar.ml.tenant_training import _data_source, train_m1
+        except ImportError as exc:
+            raise HTTPException(503, "ML platform not installed (uv sync --extra data --extra ml)") from exc
+
+        def job() -> None:
+            now = datetime.now(UTC)
+            try:
+                lake = s.extra.get("lake") or Lake.from_env()
+                build_training_set(lake, p.tenant_id, now=now, source=_data_source(s.engine, p.tenant_id))
+                OnlineStore().materialize(lake, p.tenant_id, now=now)
+                train_m1(s.engine, lake, p.tenant_id, now=now, actor=_actor(p))
+            except Exception:  # result/failure is visible in model versions/events; keep the traceback in logs
+                logging.getLogger("nirantar.ml").exception("manual training failed for %s", p.tenant_id)
+
+        background.add_task(job)
+        return {"status": "queued"}
+
+    # ------------------------------------------------------------- retention & win-back (ADR-0014)
+    @app.get("/v1/retention/overview")
+    def retention_overview(p: Principal = Depends(require(Permission.READ)),
+                           c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        def one(sql: str) -> Any:
+            return c.execute(text(sql), {"t": p.tenant_id}).one_or_none()
+
+        fit = one("SELECT fit_id, fitted_at, sbg, type_rule, report FROM ai.retention_fits WHERE tenant_id=:t "
+                  "ORDER BY fitted_at DESC LIMIT 1")
+        risk = one("SELECT computed_at, summary, items FROM ai.at_risk_snapshots WHERE tenant_id=:t "
+                   "ORDER BY computed_at DESC LIMIT 1")
+        health_row = one("SELECT report FROM ai.data_health WHERE tenant_id=:t ORDER BY computed_at DESC, run_id DESC "
+                         "LIMIT 1")
+        models = [dict(r._mapping) for r in c.execute(text(
+            "SELECT model_name, version, stage, algorithm, metrics, baseline, gates, trained_at FROM ai.model_versions "
+            "WHERE tenant_id=:t AND model_name IN ('m6_churn','m13_churn_type') ORDER BY trained_at DESC LIMIT 20"),
+            {"t": p.tenant_id})]
+        exps = c.execute(text("SELECT experiment_id, name, holdout_bp, created_at FROM experiments.experiments WHERE "
+                              "tenant_id=:t AND name LIKE 'winback-%' ORDER BY created_at DESC"),
+                         {"t": p.tenant_id}).all()
+        winback = []
+        for e in exps:
+            a = analyze(c, p.tenant_id, e.experiment_id, success_outcome="reactivated")
+            winback.append({"experiment_id": e.experiment_id, "stratum": e.name.split("-")[1],
+                            "holdout_bp": e.holdout_bp, "created_at": e.created_at, **a})
+        cases: dict[str, int] = dict(c.execute(text(
+            "SELECT status, count(*) FROM ops.cases WHERE tenant_id=:t AND kind='revival' GROUP BY 1"),
+            {"t": p.tenant_id}).all())
+        offers: dict[str, int] = dict(c.execute(text(
+            "SELECT status, count(*) FROM billing.offers WHERE tenant_id=:t GROUP BY 1"), {"t": p.tenant_id}).all())
+        report = health_row.report if health_row else {}
+        return {
+            "subscriptions": report.get("subscriptions"),
+            "fit": None if fit is None else {"fitted_at": fit.fitted_at, "sbg": fit.sbg, "type_rule": fit.type_rule,
+                                             "report": fit.report},
+            "at_risk": None if risk is None else {"computed_at": risk.computed_at, "summary": risk.summary,
+                                                  "items": list(risk.items)[:100]},
+            "models": models, "winback": winback, "cases": cases, "offers": offers,
+            "can_manage": p.can(Permission.POLICY_ADMIN),
+        }
+
+    @app.post("/v1/retention/refresh", status_code=202)
+    def retention_refresh(background: BackgroundTasks, p: Principal = Depends(require(Permission.POLICY_ADMIN)),
+                          s: Services = Depends(services)) -> dict[str, Any]:
+        """Rebuild lifecycle labels, refit sBG/CLV and re-score active subscribers now."""
+        try:
+            from nirantar.data.lake import Lake
+            from nirantar.data.lifecycle import build_lifecycle
+            from nirantar.features.offline import build_training_set
+            from nirantar.features.online import OnlineStore
+            from nirantar.ml.router import ModelRouter
+            from nirantar.ml.tenant_training import _data_source
+            from nirantar.retention.fit import fit_retention
+            from nirantar.retention.launcher import store_at_risk
+            from nirantar.retention.scoring import label_predictions, score_active
+        except ImportError as exc:
+            raise HTTPException(503, "ML platform not installed (uv sync --extra data --extra ml)") from exc
+
+        def job() -> None:
+            now = datetime.now(UTC)
+            try:
+                lake = s.extra.get("lake") or Lake.from_env()
+                build_lifecycle(lake, p.tenant_id, now=now)
+                build_training_set(lake, p.tenant_id, now=now, source=_data_source(s.engine, p.tenant_id))
+                fit_retention(s.engine, lake, p.tenant_id, now=now)
+                store = OnlineStore()
+                store.materialize(lake, p.tenant_id, now=now)
+                label_predictions(s.engine, lake, p.tenant_id, now=now)
+                store_at_risk(s.engine, p.tenant_id, score_active(s.engine, lake, p.tenant_id, now=now, store=store,
+                                                                  router=ModelRouter()), now)
+            except Exception:  # visible as a stale snapshot; traceback in logs
+                logging.getLogger("nirantar.retention").exception("retention refresh failed for %s", p.tenant_id)
+
+        background.add_task(job)
+        return {"status": "queued"}
+
+    # ------------------------------------------------------------- webhooks (provider → ingress)
+    @app.post("/webhooks/{provider_name}/{tenant_id}")
+    async def webhook(provider_name: str, tenant_id: str, request: Request,
+                      s: Services = Depends(services)) -> JSONResponse:
+        raw = await request.body()
+        provider = s.extra.get(f"provider:{provider_name}")
+        if provider is None:      # the tenant's OWN connected account (never a process-wide key)
+            from nirantar.payments.providers.resolver import ProviderNotConfigured, ProviderResolver
+
+            resolver: ProviderResolver = s.extra.setdefault("resolver", ProviderResolver(s.engine))
+            try:
+                provider = resolver.for_tenant(tenant_id, provider_name)
+            except (ProviderNotConfigured, ValueError):
+                return JSONResponse({"ok": False, "error": "provider not connected"}, status_code=404)
+        res = ingest_webhook(s.engine, provider, tenant_id, dict(request.headers), raw)
+        return JSONResponse({"ok": res.status_code == 200, "duplicate": res.duplicate}, status_code=res.status_code)
+
+    # ------------------------------------------------------------- platform console (cross-tenant health only)
+    def platform_engine(s: Services) -> Any:
+        return s.owner_engine or create_engine(os.environ.get(
+            "DATABASE_OWNER_URL", "postgresql+psycopg://nirantar_owner:nirantar_owner@localhost:25432/nirantar"))
+
+    @app.get("/platform/health", dependencies=[Depends(platform_admin)])
+    def platform_health(s: Services = Depends(services)) -> dict[str, Any]:
+        eng = platform_engine(s)
+        with eng.connect() as c:
+            def one(q: str) -> Any:
+                return c.execute(text(q)).scalar_one()
+
+            return {
+                "tenants": one("SELECT count(*) FROM core.tenants"),
+                "outbox_unpublished": one("SELECT count(*) FROM events.outbox WHERE published_at IS NULL"),
+                "outbox_oldest_unpublished_s": one(
+                    "SELECT coalesce(extract(epoch FROM now() - min(created_at)), 0) FROM events.outbox "
+                    "WHERE published_at IS NULL"),
+                "provider_events": dict(c.execute(text(
+                    "SELECT status, count(*) FROM ingest.provider_events GROUP BY status")).all()),
+                "dead_letter_events": one("SELECT count(*) FROM ingest.provider_events WHERE status='dead'"),
+                "pending_approvals": one("SELECT count(*) FROM ops.approvals WHERE status='pending'"),
+                "failed_actions_24h": one("SELECT count(*) FROM ops.actions WHERE status='failed' "
+                                          "AND created_at > now() - interval '24 hours'"),
+                "open_discrepancies": one("SELECT count(*) FROM billing.discrepancies WHERE resolved_at IS NULL"),
+            }
+
+    @app.get("/platform/tenants", dependencies=[Depends(platform_admin)])
+    def platform_tenants(s: Services = Depends(services)) -> dict[str, Any]:
+        with platform_engine(s).connect() as c:
+            rows = c.execute(text(
+                "SELECT t.tenant_id, t.name, t.status, t.created_at, "
+                "(SELECT count(*) FROM billing.customers x WHERE x.tenant_id=t.tenant_id) AS customers, "
+                "(SELECT count(*) FROM billing.debits x WHERE x.tenant_id=t.tenant_id) AS debits, "
+                "(SELECT count(*) FROM ops.actions x WHERE x.tenant_id=t.tenant_id) AS actions "
+                "FROM core.tenants t ORDER BY t.created_at DESC LIMIT 200")).all()
+        return {"items": [dict(r._mapping) for r in rows]}
+
+    @app.get("/platform/dead-letters", dependencies=[Depends(platform_admin)])
+    def dead_letters(s: Services = Depends(services)) -> dict[str, Any]:
+        with platform_engine(s).connect() as c:
+            rows = c.execute(text("SELECT tenant_id, raw_event_id, provider, event_type, attempts, last_error, "
+                                  "received_at FROM ingest.provider_events WHERE status IN ('dead','failed') "
+                                  "ORDER BY received_at DESC LIMIT 100")).all()
+        return {"items": [dict(r._mapping) for r in rows]}
+
+    # ------------------------------------------------------------ A2A v1.0 server (official SDK)
+    from nirantar.a2a.server import PartnerAuth, build_routes
+
+    svc_ = app.state.services
+    app.router.routes.extend(build_routes(svc_.engine, base_url=os.environ.get("NIRANTAR_PUBLIC_URL",
+                                                                               "http://localhost:18080"),
+                                          services=approval_executor(svc_).services,
+                                          environment=os.environ.get("NIRANTAR_ENV", "local")))
+    app.add_middleware(PartnerAuth, engine=svc_.engine)
+    return app
