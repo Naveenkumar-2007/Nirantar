@@ -1,6 +1,6 @@
 import { api } from "@/lib/api";
 import { ist } from "@/lib/format";
-import { Badge, Card, Empty, Mono, PageHeader } from "@/components/ui";
+import { Badge, Card, Empty, Mono, PageHeader } from "@/components/kit";
 import { DecideButtons } from "./decide-buttons";
 
 type Approval = {
@@ -25,8 +25,8 @@ export default async function ApprovalsPage() {
               <div>
                 <div className="flex items-center gap-2"><Mono>{a.tool_name}</Mono><Badge>{a.status}</Badge></div>
                 <p className="mt-2 text-sm">{a.reason}</p>
-                <p className="mt-1 text-xs text-[var(--muted)]">Requested by {a.requested_by} · {ist(a.requested_at)} · expires {ist(a.expires_at)}</p>
-                <pre className="mt-2 max-w-xl overflow-auto rounded bg-[var(--chip)] p-2 text-xs">{JSON.stringify(a.params, null, 2)}</pre>
+                <p className="mt-1 text-xs text-muted-foreground">Requested by {a.requested_by} · {ist(a.requested_at)} · expires {ist(a.expires_at)}</p>
+                <pre className="mt-2 max-w-xl overflow-auto rounded bg-muted p-2 text-xs">{JSON.stringify(a.params, null, 2)}</pre>
               </div>
               <DecideButtons approvalId={a.approval_id} />
             </div>

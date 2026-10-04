@@ -1,6 +1,6 @@
 import { api, ApiError } from "@/lib/api";
 import { ist } from "@/lib/format";
-import { Badge, Card, Empty, Mono, PageHeader, Table, Td } from "@/components/ui";
+import { Badge, Card, Empty, Mono, PageHeader, Table, Td, Tr } from "@/components/kit";
 import { ConsentForm, RevokeButton } from "./forms";
 
 type Request = { request_id: string; client_name: string; client_id: string; redirect_uri: string; scopes: string[];
@@ -29,30 +29,30 @@ export default async function ConnectMcpPage({ searchParams }: { searchParams: P
       <div className="space-y-4">
         {pending?.req && (
           <Card title={`${pending.req.client_name} wants to connect`}>
-            <p className="mb-3 text-sm text-[var(--muted)]">
+            <p className="mb-3 text-sm text-muted-foreground">
               After you connect, it returns to <Mono>{new URL(pending.req.redirect_uri).host}</Mono>. This request expires at {ist(pending.req.expires_at)}.
             </p>
             <ConsentForm requestId={pending.req.request_id} scopes={pending.req.scopes} />
           </Card>
         )}
-        {pending?.error && <Card title="Connection request"><p className="text-sm text-[var(--bad-fg)]">{pending.error}</p></Card>}
+        {pending?.error && <Card title="Connection request"><p className="text-sm text-danger">{pending.error}</p></Card>}
         <Card title="How to connect">
           <p className="text-sm">Add this server address to your MCP client (for example Claude → Settings → Connectors):</p>
           <p className="mt-2"><Mono>{`${MCP_URL}/mcp`}</Mono></p>
-          <p className="mt-2 text-xs text-[var(--muted)]">The client opens this page so you can choose what it may do. Money actions always wait for your approval.</p>
+          <p className="mt-2 text-xs text-muted-foreground">The client opens this page so you can choose what it may do. Money actions always wait for your approval.</p>
         </Card>
         <Card title="Connections">
           {grants.items.length === 0 ? <Empty title="No AI apps connected yet" /> : (
             <Table head={["App", "Permissions", "Connected", "Last token", "Status", ""]}>
               {grants.items.map((g) => (
-                <tr key={g.grant_id}>
+                <Tr key={g.grant_id}>
                   <Td>{g.client_name ?? <Mono>{g.client_id}</Mono>}</Td>
                   <Td>{g.scopes.map((s) => <Badge key={s}>{s.replace("nirantar:", "")}</Badge>)}</Td>
                   <Td>{ist(g.created_at)}</Td>
                   <Td>{ist(g.last_token_at)}</Td>
                   <Td>{g.revoked_at ? <Badge tone="bad">revoked</Badge> : <Badge tone="good">active</Badge>}</Td>
                   <Td>{!g.revoked_at && <RevokeButton grantId={g.grant_id} />}</Td>
-                </tr>
+                </Tr>
               ))}
             </Table>
           )}

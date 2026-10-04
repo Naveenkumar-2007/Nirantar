@@ -7,7 +7,7 @@ import { refreshLearned, saveSettings, type FormResult } from "./actions";
 function Status({ state }: { state: FormResult | null }) {
   if (!state) return null;
   return (
-    <span role="status" className={`text-xs ${state.ok ? "text-[var(--good-fg)]" : "text-[var(--bad-fg)]"}`}>
+    <span role="status" className={`text-xs ${state.ok ? "text-success" : "text-danger"}`}>
       {state.message}
     </span>
   );
@@ -25,18 +25,18 @@ export function SettingsForm({ namespace, version, canEdit, children }: {
       <input type="hidden" name="version" value={version} />
       <fieldset disabled={!canEdit || pending} className="space-y-4 disabled:opacity-70">{children}</fieldset>
       {canEdit ? (
-        <div className="flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-3">
+        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
           <label className="sr-only" htmlFor={`${namespace}-reason`}>Reason for change</label>
           <input id={`${namespace}-reason`} name="reason" required minLength={3} placeholder="Reason for this change (audited)"
-            className="min-w-0 flex-1 rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-1.5 text-sm" />
+            className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-sm" />
           <button disabled={pending}
-            className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">
+            className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50">
             {pending ? "Saving…" : "Save new version"}
           </button>
           <Status state={state} />
         </div>
       ) : (
-        <p className="text-xs text-[var(--muted)]">Read-only: your role cannot change settings (needs policy:admin).</p>
+        <p className="text-xs text-muted-foreground">Read-only: your role cannot change settings (needs policy:admin).</p>
       )}
     </form>
   );
@@ -48,7 +48,7 @@ export function RefreshLearnedButton({ canEdit }: { canEdit: boolean }) {
   return (
     <form action={action} className="flex items-center gap-2">
       <button disabled={pending}
-        className="rounded-md border border-[var(--border)] px-3 py-1.5 text-sm disabled:opacity-50">
+        className="rounded-md border border-border px-3 py-1.5 text-sm disabled:opacity-50">
         {pending ? "Learning…" : "Re-learn from verified outcomes"}
       </button>
       <Status state={state} />
@@ -59,11 +59,11 @@ export function RefreshLearnedButton({ canEdit }: { canEdit: boolean }) {
 export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <label className="block">
-      <span className="text-sm font-medium text-[var(--fg)]">{label}</span>
-      {hint && <span className="mt-0.5 block text-xs text-[var(--muted)]">{hint}</span>}
+      <span className="text-sm font-medium text-foreground">{label}</span>
+      {hint && <span className="mt-0.5 block text-xs text-muted-foreground">{hint}</span>}
       <span className="mt-1 block">{children}</span>
     </label>
   );
 }
 
-export const inputCls = "w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-1.5 text-sm tabular-nums";
+export const inputCls = "w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm tabular-nums";

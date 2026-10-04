@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { ist } from "@/lib/format";
-import { Badge, Card, Mono, PageHeader, Table, Td } from "@/components/ui";
+import { Badge, Card, Mono, PageHeader, Table, Td, Tr } from "@/components/kit";
 import { Field, RefreshLearnedButton, SettingsForm, inputCls } from "./forms";
 import type { LearnedResponse, RiskThresholdSettings, SettingsResponse, Versioned } from "./types";
 
@@ -12,7 +12,7 @@ const pct = (p: number) => `${(p * 100).toFixed(1)}%`;
 function Origin({ v }: { v: Versioned }) {
   return v.version === 0
     ? <Badge tone="neutral">platform default</Badge>
-    : <span className="text-xs text-[var(--muted)]"><Badge tone="info">v{v.version}</Badge> {v.changed_by} · {ist(v.created_at)} · “{v.reason}”</span>;
+    : <span className="text-xs text-muted-foreground"><Badge tone="info">v{v.version}</Badge> {v.changed_by} · {ist(v.created_at)} · “{v.reason}”</span>;
 }
 
 function SourceBadge({ source }: { source: string }) {
@@ -36,22 +36,22 @@ export default async function AutomationsPage() {
     <>
       <PageHeader title="Automations & settings"
         subtitle="Every number the agents use is yours: versioned, audited, and — where marked learned — estimated from your own verified outcomes."
-        right={<Link href="/automations/templates" className="rounded-md border border-[var(--border)] px-3 py-1.5 text-sm">Message templates →</Link>} />
+        right={<Link href="/automations/templates" className="rounded-md border border-border px-3 py-1.5 text-sm">Message templates →</Link>} />
 
       <div className="grid gap-4 xl:grid-cols-2">
         {/* ------------------------------------------------ what's in force now */}
         <Card title="In force right now" className="xl:col-span-2">
           <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-            <div><div className="text-xs text-[var(--muted)]">M1 risk threshold</div>
+            <div><div className="text-xs text-muted-foreground">M1 risk threshold</div>
               <div className="text-lg font-semibold tabular-nums">{s.effective.risk_threshold.toFixed(2)}</div>
               <SourceBadge source={s.effective.sources.risk_threshold} /></div>
-            <div><div className="text-xs text-[var(--muted)]">Contact effects</div>
+            <div><div className="text-xs text-muted-foreground">Contact effects</div>
               <div className="text-lg font-semibold">{effEv ? `${effEv.outcomes_used} outcomes` : "—"}</div>
               <SourceBadge source={s.effective.sources.effects} /></div>
-            <div><div className="text-xs text-[var(--muted)]">Capacity per round</div>
+            <div><div className="text-xs text-muted-foreground">Capacity per round</div>
               <div className="text-lg font-semibold tabular-nums">WA {s.effective.capacity.whatsapp} · Voice {s.effective.capacity.voice}</div>
               <SourceBadge source={`channels ${s.effective.sources.channels}`} /></div>
-            <div><div className="text-xs text-[var(--muted)]">Contact window</div>
+            <div><div className="text-xs text-muted-foreground">Contact window</div>
               <div className="text-lg font-semibold tabular-nums">{pol.contact_window[0]}–{pol.contact_window[1]}</div>
               <SourceBadge source={`policy ${s.effective.sources.policy}`} /></div>
           </div>
@@ -103,7 +103,7 @@ export default async function AutomationsPage() {
             </div>
           </SettingsForm>
           {thrEv && (
-            <p className="mt-3 text-xs text-[var(--muted)]">
+            <p className="mt-3 text-xs text-muted-foreground">
               Last learning run (v{learned.risk_threshold!.version}, {ist(learned.risk_threshold!.created_at)}): {thrEv.labels} labelled debits, {thrEv.positives} failures.{" "}
               {thrEv.threshold !== undefined
                 ? <>Best threshold {thrEv.threshold} · precision {thrEv.precision ?? "—"} · recall {thrEv.recall} · value ₹{rupees(thrEv.value_minor_at_threshold ?? 0)} vs ₹{rupees(thrEv.value_minor_at_fallback ?? 0)} at the fallback.</>
@@ -118,7 +118,7 @@ export default async function AutomationsPage() {
             <Origin v={ns.effects} />
             <RefreshLearnedButton canEdit={s.can_edit} />
           </div>
-          <p className="mb-3 text-xs text-[var(--muted)]">
+          <p className="mb-3 text-xs text-muted-foreground">
             Incremental recovery probability of one contact, per failure category. Learned from your randomised holdout
             (intention-to-treat ÷ contact rate), shrunk towards your prior; categories with too little data keep the prior.
           </p>
@@ -135,19 +135,19 @@ export default async function AutomationsPage() {
               {Object.keys(eff.prior).map((cat) => {
                 const ev = effEv?.categories[cat];
                 return (
-                  <tr key={cat}>
+                  <Tr key={cat}>
                     <Td><Mono>{cat}</Mono></Td>
                     {ARMS.map((a) => (
                       <Td key={a}><input aria-label={`${cat} ${a} prior %`} name={`prior.${cat}.${a}`} type="number" min={0} max={100} step={0.1}
                         defaultValue={+(eff.prior[cat][a] * 100).toFixed(2)} className={`${inputCls} w-24`} /></Td>
                     ))}
                     {ARMS.map((a) => <Td key={`e-${a}`} className="tabular-nums">{pct(s.effective.effects[cat]?.[a] ?? 0)}</Td>)}
-                    <Td className="text-xs text-[var(--muted)]">
+                    <Td wrap className="text-xs text-muted-foreground">
                       {!ev ? "—" : ev.source === "learned"
                         ? <>treated {ev.treated} / holdout {ev.holdout} · recovery {pct(ev.recovery_treated!)} vs {pct(ev.recovery_holdout!)} · effect {pct(ev.cace!)} (95% CI {pct(ev.cace_ci95![0])}–{pct(ev.cace_ci95![1])})</>
                         : <>prior kept: {ev.treated} treated / {ev.holdout} holdout</>}
                     </Td>
-                  </tr>
+                  </Tr>
                 );
               })}
             </Table>
@@ -170,7 +170,7 @@ export default async function AutomationsPage() {
         {/* ------------------------------------------------ policy */}
         <Card title="Compliance tightening">
           <div className="mb-3"><Origin v={ns.policy} /></div>
-          <p className="mb-3 text-xs text-[var(--muted)]">
+          <p className="mb-3 text-xs text-muted-foreground">
             You can only make these stricter than the platform baseline (regulation + governance, cited in Compliance).
             Baseline: window {base.contact_window[0]}–{base.contact_window[1]}, {base.max_contacts_7d} contacts/7 days, notice ≥ {base.predebit_notice_hours}h.
           </p>

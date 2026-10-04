@@ -1,6 +1,6 @@
 import { api } from "@/lib/api";
 import { ist } from "@/lib/format";
-import { Badge, Card, Mono, PageHeader, Table, Td } from "@/components/ui";
+import { Badge, Card, Mono, PageHeader, Table, Td, Tr } from "@/components/kit";
 
 type Rec = { seq: number; at: string; actor: string; action: string; data_hash: string; hash: string };
 
@@ -16,14 +16,14 @@ export default async function AuditPage() {
       <Card>
         <Table head={["#", "When", "Actor", "Action", "Data hash", "Record hash"]}>
           {recs.items.map((r) => (
-            <tr key={r.seq}>
+            <Tr key={r.seq}>
               <Td className="tabular-nums">{r.seq}</Td>
-              <Td className="whitespace-nowrap text-xs text-[var(--muted)]">{ist(r.at)}</Td>
+              <Td className="whitespace-nowrap text-xs text-muted-foreground">{ist(r.at)}</Td>
               <Td className="text-xs">{r.actor}</Td>
               <Td><Badge tone="neutral">{r.action}</Badge></Td>
               <Td><Mono>{r.data_hash.slice(0, 12)}…</Mono></Td>
               <Td><Mono>{r.hash.slice(0, 12)}…</Mono></Td>
-            </tr>
+            </Tr>
           ))}
         </Table>
       </Card>

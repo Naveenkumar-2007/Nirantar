@@ -1,6 +1,6 @@
 import { api } from "@/lib/api";
 import { ist } from "@/lib/format";
-import { Badge, Card, Empty, PageHeader, Table, Td } from "@/components/ui";
+import { Badge, Card, Empty, PageHeader, Table, Td, Tr } from "@/components/kit";
 import { revokeInvite } from "./actions";
 import { InviteForm } from "./invite-form";
 
@@ -20,13 +20,13 @@ export default async function TeamPage() {
           {team.members.length === 0 ? <Empty title="No signed-in members yet" /> : (
             <Table head={["Name", "Email", "Role", "Since", "Status"]}>
               {team.members.map((m) => (
-                <tr key={m.user_sub}>
+                <Tr key={m.user_sub}>
                   <Td>{m.name ?? "—"}</Td>
                   <Td>{m.email ?? "—"}</Td>
                   <Td>{m.roles.map((r) => <Badge key={r}>{r.replaceAll("_", " ")}</Badge>)}</Td>
                   <Td>{ist(m.created_at)}</Td>
                   <Td><Badge tone={m.status === "active" ? "good" : "neutral"}>{m.status}</Badge></Td>
-                </tr>
+                </Tr>
               ))}
             </Table>
           )}
@@ -35,20 +35,20 @@ export default async function TeamPage() {
           <Card title="Pending invites">
             <Table head={["Role", "Invited", "Expires", ""]}>
               {team.invites.map((i) => (
-                <tr key={i.invite_id}>
+                <Tr key={i.invite_id}>
                   <Td>{i.roles.join(", ").replaceAll("_", " ")}</Td>
                   <Td>{ist(i.created_at)}</Td>
                   <Td>{ist(i.expires_at)}</Td>
                   <Td>
                     <form action={revokeInvite}>
                       <input type="hidden" name="invite_id" value={i.invite_id} />
-                      <button className="text-xs text-[var(--muted)] hover:text-[var(--bad-fg)]">Revoke</button>
+                      <button className="text-xs text-muted-foreground hover:text-danger">Revoke</button>
                     </form>
                   </Td>
-                </tr>
+                </Tr>
               ))}
             </Table>
-            <p className="mt-2 text-xs text-[var(--muted)]">For privacy, invite emails are stored only as a hash, so they aren&apos;t shown here.</p>
+            <p className="mt-2 text-xs text-muted-foreground">For privacy, invite emails are stored only as a hash, so they aren&apos;t shown here.</p>
           </Card>
         )}
       </div>

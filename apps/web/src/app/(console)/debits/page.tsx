@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { day, inr } from "@/lib/format";
-import { Badge, Card, Empty, PageHeader, Table, Td } from "@/components/ui";
+import { Badge, Card, Empty, PageHeader, Table, Td, Tr } from "@/components/kit";
 
 type Debit = {
   debit_id: string; customer_id: string; display_name: string | null; scheduled_for: string; amount_minor: number;
@@ -21,7 +21,7 @@ export default async function DebitsPage({ searchParams }: { searchParams: Promi
       <div className="mb-4 flex flex-wrap gap-2">
         {STATUSES.map((s) => (
           <Link key={s || "all"} href={s ? `/debits?status=${s}` : "/debits"}
-            className={`rounded-full border px-3 py-1 text-xs ${s === status ? "border-[var(--accent)] text-[var(--accent)]" : "border-[var(--border)] text-[var(--muted)]"}`}>
+            className={`rounded-full border px-3 py-1 text-xs ${s === status ? "border-primary text-primary" : "border-border text-muted-foreground"}`}>
             {s || "all"}
           </Link>
         ))}
@@ -32,22 +32,22 @@ export default async function DebitsPage({ searchParams }: { searchParams: Promi
         ) : (
           <Table head={["Customer", "Due", "Amount", "Status", "Attempts", "Last error", ""]}>
             {data.items.map((d) => (
-              <tr key={d.debit_id}>
+              <Tr key={d.debit_id}>
                 <Td>{d.display_name ?? d.customer_id}</Td>
                 <Td>{day(d.scheduled_for)}</Td>
                 <Td className="tabular-nums">{inr(d.amount_minor)}</Td>
                 <Td><Badge>{d.status}</Badge></Td>
                 <Td className="tabular-nums">{d.attempt_count}</Td>
-                <Td className="text-xs text-[var(--muted)]">{d.last_error_code ?? "—"}</Td>
-                <Td><Link className="text-[var(--accent)]" href={`/debits/${d.debit_id}`}>Timeline →</Link></Td>
-              </tr>
+                <Td className="text-xs text-muted-foreground">{d.last_error_code ?? "—"}</Td>
+                <Td><Link className="text-primary" href={`/debits/${d.debit_id}`}>Timeline →</Link></Td>
+              </Tr>
             ))}
           </Table>
         )}
         <div className="mt-4 flex justify-between text-sm">
-          {cursor ? <Link className="text-[var(--accent)]" href={status ? `/debits?status=${status}` : "/debits"}>← First page</Link> : <span />}
+          {cursor ? <Link className="text-primary" href={status ? `/debits?status=${status}` : "/debits"}>← First page</Link> : <span />}
           {data.next_cursor && (
-            <Link className="text-[var(--accent)]" href={`/debits?${new URLSearchParams({ ...(status ? { status } : {}), cursor: data.next_cursor })}`}>
+            <Link className="text-primary" href={`/debits?${new URLSearchParams({ ...(status ? { status } : {}), cursor: data.next_cursor })}`}>
               Next page →
             </Link>
           )}

@@ -1,6 +1,6 @@
 import { api } from "@/lib/api";
 import { ist } from "@/lib/format";
-import { Badge, Card, Empty, Mono, PageHeader, Table, Td } from "@/components/ui";
+import { Badge, Card, Empty, Mono, PageHeader, Table, Td, Tr } from "@/components/kit";
 
 type Decision = { action_id: string; agent_id: string; tool_name: string; policy_decision: string; policy_version: string; created_at: string };
 type Policy = { policy_id: string; rule: string | null; effective_date: string | null; status: string; source: string | null };
@@ -18,10 +18,10 @@ export default async function CompliancePage() {
           {c.decisions.length === 0 ? <Empty title="No blocked or escalated actions" /> : (
             <Table head={["When", "Agent", "Tool", "Decision"]}>
               {c.decisions.slice(0, 50).map((d) => (
-                <tr key={d.action_id}>
-                  <Td className="text-xs text-[var(--muted)]">{ist(d.created_at)}</Td>
+                <Tr key={d.action_id}>
+                  <Td className="text-xs text-muted-foreground">{ist(d.created_at)}</Td>
                   <Td>{d.agent_id}</Td><Td><Mono>{d.tool_name}</Mono></Td><Td><Badge>{d.policy_decision}</Badge></Td>
-                </tr>
+                </Tr>
               ))}
             </Table>
           )}
@@ -30,7 +30,7 @@ export default async function CompliancePage() {
           {c.contact_log.length === 0 ? <Empty title="No customer contacts" /> : (
             <Table head={["Channel", "Purpose", "Status", "Count"]}>
               {c.contact_log.map((r, i) => (
-                <tr key={i}><Td>{r.channel}</Td><Td>{r.purpose}</Td><Td><Badge>{r.status}</Badge></Td><Td className="tabular-nums">{r.n}</Td></tr>
+                <Tr key={i}><Td>{r.channel}</Td><Td>{r.purpose}</Td><Td><Badge>{r.status}</Badge></Td><Td className="tabular-nums">{r.n}</Td></Tr>
               ))}
             </Table>
           )}
@@ -39,12 +39,12 @@ export default async function CompliancePage() {
       <Card title={`Policy knowledge base (${p.items.length} records)`} className="mt-6">
         <Table head={["Policy", "Rule", "Effective", "Verification"]}>
           {p.items.map((r) => (
-            <tr key={r.policy_id}>
+            <Tr key={r.policy_id}>
               <Td><Mono>{r.policy_id}</Mono></Td>
-              <Td className="max-w-xl text-xs">{r.rule}</Td>
+              <Td wrap className="max-w-xl text-xs">{r.rule}</Td>
               <Td className="whitespace-nowrap text-xs">{r.effective_date ?? "—"}</Td>
               <Td><Badge tone={r.status === "verified" ? "good" : r.status === "governance" ? "info" : "warn"}>{r.status}</Badge></Td>
-            </tr>
+            </Tr>
           ))}
         </Table>
       </Card>

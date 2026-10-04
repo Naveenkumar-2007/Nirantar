@@ -1,6 +1,6 @@
 import { api } from "@/lib/api";
 import { inr, pct } from "@/lib/format";
-import { Badge, Card, Empty, PageHeader, Table, Td } from "@/components/ui";
+import { Badge, Card, Empty, PageHeader, Table, Td, Tr } from "@/components/kit";
 
 type Analysis = {
   experiment_id: string;
@@ -23,23 +23,23 @@ export default async function ExperimentsPage() {
       <Card title="Arms">
         <Table head={["Arm", "Customers", "Paid or recovered", "Verified ₹"]}>
           {Object.entries(a.arms).map(([arm, s]) => (
-            <tr key={arm}><Td><Badge tone={arm === "holdout" ? "neutral" : "info"}>{arm}</Badge></Td>
+            <Tr key={arm}><Td><Badge tone={arm === "holdout" ? "neutral" : "info"}>{arm}</Badge></Td>
               <Td className="tabular-nums">{s.n}</Td><Td className="tabular-nums">{pct(s.recovery_rate)}</Td>
-              <Td className="tabular-nums">{inr(s.value_minor)}</Td></tr>
+              <Td className="tabular-nums">{inr(s.value_minor)}</Td></Tr>
           ))}
         </Table>
       </Card>
       <Card title="Incrementality" className="mt-6">
         {!a.incremental || Object.keys(a.incremental).length === 0 ? (
-          <p className="text-sm text-[var(--muted)]">{a.note ?? "Not enough data yet."} The holdout needs at least 30 customers per arm before we report an estimate.</p>
+          <p className="text-sm text-muted-foreground">{a.note ?? "Not enough data yet."} The holdout needs at least 30 customers per arm before we report an estimate.</p>
         ) : (
           <Table head={["Arm", "Δ recovery (points)", "95% CI", "Δ ₹ / customer", "Δ ₹ total", ""]}>
             {Object.entries(a.incremental).map(([arm, i]) => (
-              <tr key={arm}><Td>{arm}</Td><Td className="tabular-nums">{pct(i.incremental_recovery_rate)}</Td>
+              <Tr key={arm}><Td>{arm}</Td><Td className="tabular-nums">{pct(i.incremental_recovery_rate)}</Td>
                 <Td className="tabular-nums text-xs">{pct(i.ci95[0])} … {pct(i.ci95[1])}</Td>
                 <Td className="tabular-nums">{inr(i.incremental_value_per_customer_minor)}</Td>
                 <Td className="tabular-nums">{inr(i.incremental_value_total_minor)}</Td>
-                <Td><Badge tone={i.significant ? "good" : "warn"}>{i.significant ? "significant" : "inconclusive"}</Badge></Td></tr>
+                <Td><Badge tone={i.significant ? "good" : "warn"}>{i.significant ? "significant" : "inconclusive"}</Badge></Td></Tr>
             ))}
           </Table>
         )}

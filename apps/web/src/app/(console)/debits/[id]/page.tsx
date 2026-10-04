@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ApiError, api } from "@/lib/api";
 import { day, inr, ist, pct } from "@/lib/format";
-import { Badge, Card, Mono, PageHeader, Stat } from "@/components/ui";
+import { Badge, Card, Mono, PageHeader, Stat } from "@/components/kit";
 
 type Detail = {
   debit: { debit_id: string; display_name: string | null; amount_minor: number; scheduled_for: string; status: string;
@@ -25,7 +25,7 @@ export default async function DebitDetail({ params }: { params: Promise<{ id: st
   const pred = d.predictions[0];
   return (
     <>
-      <Link href="/debits" className="text-sm text-[var(--accent)]">← Debits</Link>
+      <Link href="/debits" className="text-sm text-primary">← Debits</Link>
       <PageHeader title={`${d.debit.display_name ?? "Customer"} · ${inr(d.debit.amount_minor)}`}
         subtitle={`Due ${day(d.debit.scheduled_for)} · ${d.debit.segment} · language ${d.debit.preferred_language}`}
         right={<Badge>{d.debit.status}</Badge>} />
@@ -37,24 +37,24 @@ export default async function DebitDetail({ params }: { params: Promise<{ id: st
           hint={d.labels.map((l) => `${l.label_name}=${String(l.value.value)}`).join(" · ") || "awaiting verified outcome"} />
       </div>
       <Card title="Timeline (events and agent actions)" className="mt-6">
-        <ol className="relative space-y-4 border-l border-[var(--border)] pl-5">
+        <ol className="relative space-y-4 border-l border-border pl-5">
           {d.timeline.map((t, i) => (
             <li key={i}>
-              <span className={`absolute -left-1.5 mt-1.5 h-3 w-3 rounded-full ${t.kind === "action" ? "bg-[var(--accent)]" : "bg-[var(--muted)]"}`} />
+              <span className={`absolute -left-1.5 mt-1.5 h-3 w-3 rounded-full ${t.kind === "action" ? "bg-primary" : "bg-muted-foreground"}`} />
               <div className="flex flex-wrap items-center gap-2 text-sm">
-                <span className="text-xs text-[var(--muted)] tabular-nums">{ist(t.at)}</span>
+                <span className="text-xs text-muted-foreground tabular-nums">{ist(t.at)}</span>
                 <span className="font-medium">{t.title}</span>
                 {t.kind === "action" && typeof t.detail.status === "string" && <Badge>{t.detail.status}</Badge>}
                 {t.kind === "action" && typeof t.detail.policy === "string" && <Badge>{t.detail.policy}</Badge>}
               </div>
               <details className="mt-1">
-                <summary className="cursor-pointer text-xs text-[var(--muted)]">details</summary>
-                <pre className="mt-1 max-h-64 overflow-auto rounded bg-[var(--chip)] p-2 text-xs">{JSON.stringify(t.detail, null, 2)}</pre>
+                <summary className="cursor-pointer text-xs text-muted-foreground">details</summary>
+                <pre className="mt-1 max-h-64 overflow-auto rounded bg-muted p-2 text-xs">{JSON.stringify(t.detail, null, 2)}</pre>
               </details>
             </li>
           ))}
         </ol>
-        <p className="mt-4 text-xs text-[var(--muted)]">Debit id <Mono>{d.debit.debit_id}</Mono></p>
+        <p className="mt-4 text-xs text-muted-foreground">Debit id <Mono>{d.debit.debit_id}</Mono></p>
       </Card>
     </>
   );

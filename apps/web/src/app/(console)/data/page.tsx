@@ -1,6 +1,6 @@
 import { api } from "@/lib/api";
 import { ist } from "@/lib/format";
-import { Badge, Card, Empty, Mono, PageHeader, Stat, Table, Td } from "@/components/ui";
+import { Badge, Card, Empty, Mono, PageHeader, Stat, Table, Td, Tr } from "@/components/kit";
 import { SyncButton } from "./sync-button";
 
 type Gap = { need: number; have: number };
@@ -34,8 +34,8 @@ const LABEL: Record<string, string> = {
 function Progress({ have, need }: Gap) {
   const pct = Math.min(100, Math.round((have / need) * 100));
   return (
-    <div className="h-1.5 w-full rounded-full bg-[var(--chip)]" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-      <div className="h-1.5 rounded-full bg-[var(--accent)]" style={{ width: `${pct}%` }} />
+    <div className="h-1.5 w-full rounded-full bg-muted" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+      <div className="h-1.5 rounded-full bg-primary" style={{ width: `${pct}%` }} />
     </div>
   );
 }
@@ -75,15 +75,15 @@ export default async function DataPage() {
           <Card title="Model readiness (trained per business, on your own data)">
             <div className="grid gap-4 md:grid-cols-2">
               {Object.entries(report.readiness).map(([key, r]) => (
-                <div key={key} className="rounded-lg border border-[var(--border)] p-3">
+                <div key={key} className="rounded-lg border border-border p-3">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-sm font-medium">{r.title}</span>
                     {r.ready ? <Badge tone="good">ready to train</Badge> : <Badge tone="warn">collecting data</Badge>}
                   </div>
-                  {r.ready ? <p className="mt-2 text-xs text-[var(--muted)]">Enough evidence for a per-business model.</p> : (
+                  {r.ready ? <p className="mt-2 text-xs text-muted-foreground">Enough evidence for a per-business model.</p> : (
                     <ul className="mt-2 space-y-2">
                       {Object.entries(r.gaps).map(([k, g]) => (
-                        <li key={k} className="text-xs text-[var(--muted)]">
+                        <li key={k} className="text-xs text-muted-foreground">
                           <div className="mb-1 flex justify-between"><span>{LABEL[k] ?? k}</span><span className="tabular-nums">{g.have.toLocaleString("en-IN")} / {g.need.toLocaleString("en-IN")}</span></div>
                           <Progress have={g.have} need={g.need} />
                         </li>
@@ -93,12 +93,12 @@ export default async function DataPage() {
                 </div>
               ))}
             </div>
-            <p className="mt-3 text-xs text-[var(--muted)]">Until a model is ready, decisions use rules and platform-wide starting estimates, and say so.</p>
+            <p className="mt-3 text-xs text-muted-foreground">Until a model is ready, decisions use rules and platform-wide starting estimates, and say so.</p>
           </Card>
 
           <div className="grid gap-4 lg:grid-cols-2">
             <Card title="Sources">
-              {report.sources.length === 0 ? <p className="text-sm text-[var(--muted)]">No provider connected.</p> : (
+              {report.sources.length === 0 ? <p className="text-sm text-muted-foreground">No provider connected.</p> : (
                 <ul className="space-y-1 text-sm">
                   {report.sources.map((s) => <li key={s.provider + s.mode}><Mono>{s.provider}</Mono> <Badge tone="neutral">{s.mode}</Badge> connected {ist(s.created_at)}</li>)}
                 </ul>
@@ -106,17 +106,17 @@ export default async function DataPage() {
               {report.backfill.length > 0 && (
                 <Table head={["Entity", "History imported up to", "Rows"]}>
                   {report.backfill.map((b) => (
-                    <tr key={b.provider + b.entity}><Td><Mono>{b.provider}.{b.entity}</Mono></Td><Td>{ist(b.settled_until)}</Td><Td className="tabular-nums">{b.rows}</Td></tr>
+                    <Tr key={b.provider + b.entity}><Td><Mono>{b.provider}.{b.entity}</Mono></Td><Td>{ist(b.settled_until)}</Td><Td className="tabular-nums">{b.rows}</Td></Tr>
                   ))}
                 </Table>
               )}
-              <p className="mt-2 text-xs text-[var(--muted)]">Names, phone numbers, emails and UPI ids are replaced by keyed hashes before anything is stored.</p>
+              <p className="mt-2 text-xs text-muted-foreground">Names, phone numbers, emails and UPI ids are replaced by keyed hashes before anything is stored.</p>
             </Card>
             <Card title="Lakehouse layers">
               <Table head={["Table", "Rows"]}>
                 {(["bronze", "silver", "gold"] as const).flatMap((layer) =>
                   Object.entries(report.layers[layer]).filter(([, n]) => n > 0 || layer === "gold").map(([t, n]) => (
-                    <tr key={t}><Td><Mono>{t}</Mono></Td><Td className="tabular-nums">{n.toLocaleString("en-IN")}</Td></tr>
+                    <Tr key={t}><Td><Mono>{t}</Mono></Td><Td className="tabular-nums">{n.toLocaleString("en-IN")}</Td></Tr>
                   )))}
               </Table>
             </Card>
@@ -133,15 +133,15 @@ export default async function DataPage() {
           <Card title="Recent pipeline runs">
             <Table head={["Started", "Trigger", "Status", "Duration", "Steps"]}>
               {runs.items.map((r) => (
-                <tr key={r.run_id}>
+                <Tr key={r.run_id}>
                   <Td>{ist(r.started_at)}</Td><Td>{r.trigger}</Td>
-                  <Td><Badge>{r.status}</Badge>{r.error && <div className="mt-1 max-w-xs text-xs text-[var(--bad-fg)]">{r.error}</div>}</Td>
+                  <Td wrap><Badge>{r.status}</Badge>{r.error && <div className="mt-1 max-w-xs text-xs text-danger">{r.error}</div>}</Td>
                   <Td className="tabular-nums">{duration(r)}</Td>
-                  <Td className="text-xs text-[var(--muted)]">{r.steps.map((s) => `${s.step} ${(s.ms / 1000).toFixed(1)}s`).join(" · ")}</Td>
-                </tr>
+                  <Td wrap className="text-xs text-muted-foreground">{r.steps.map((s) => `${s.step} ${(s.ms / 1000).toFixed(1)}s`).join(" · ")}</Td>
+                </Tr>
               ))}
             </Table>
-            <p className="mt-2 text-xs text-[var(--muted)]">Last health report {ist(report.computed_at)}. Runs also start automatically every hour and when a business is onboarded.</p>
+            <p className="mt-2 text-xs text-muted-foreground">Last health report {ist(report.computed_at)}. Runs also start automatically every hour and when a business is onboarded.</p>
           </Card>
         </div>
       )}

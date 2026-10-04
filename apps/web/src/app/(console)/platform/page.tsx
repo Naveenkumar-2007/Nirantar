@@ -1,6 +1,6 @@
 import { api } from "@/lib/api";
 import { ist } from "@/lib/format";
-import { Badge, Card, Empty, Mono, PageHeader, Stat, Table, Td } from "@/components/ui";
+import { Badge, Card, Empty, Mono, PageHeader, Stat, Table, Td, Tr } from "@/components/kit";
 
 type Health = {
   tenants: number; outbox_unpublished: number; outbox_oldest_unpublished_s: number;
@@ -31,16 +31,16 @@ export default async function PlatformPage() {
       <Card title="Tenants" className="mt-6">
         <Table head={["Tenant", "Name", "Status", "Customers", "Debits", "Agent actions", "Created"]}>
           {t.items.map((x) => (
-            <tr key={x.tenant_id}><Td><Mono>{x.tenant_id.slice(0, 14)}…</Mono></Td><Td>{x.name}</Td><Td><Badge>{x.status === "active" ? "ok" : x.status}</Badge></Td>
+            <Tr key={x.tenant_id}><Td><Mono>{x.tenant_id.slice(0, 14)}…</Mono></Td><Td>{x.name}</Td><Td><Badge>{x.status === "active" ? "ok" : x.status}</Badge></Td>
               <Td className="tabular-nums">{x.customers}</Td><Td className="tabular-nums">{x.debits}</Td><Td className="tabular-nums">{x.actions}</Td>
-              <Td className="text-xs text-[var(--muted)]">{ist(x.created_at)}</Td></tr>
+              <Td className="text-xs text-muted-foreground">{ist(x.created_at)}</Td></Tr>
           ))}
         </Table>
       </Card>
       <Card title="Dead-letter queue" className="mt-6">
         {d.items.length === 0 ? <Empty title="No dead-lettered provider events" /> : (
           <Table head={["Received", "Provider", "Event", "Attempts", "Last error"]}>
-            {d.items.map((x) => (<tr key={x.raw_event_id}><Td className="text-xs">{ist(x.received_at)}</Td><Td>{x.provider}</Td><Td>{x.event_type}</Td><Td>{x.attempts}</Td><Td className="text-xs">{x.last_error}</Td></tr>))}
+            {d.items.map((x) => (<Tr key={x.raw_event_id}><Td className="text-xs">{ist(x.received_at)}</Td><Td>{x.provider}</Td><Td>{x.event_type}</Td><Td>{x.attempts}</Td><Td wrap className="text-xs">{x.last_error}</Td></Tr>))}
           </Table>
         )}
       </Card>

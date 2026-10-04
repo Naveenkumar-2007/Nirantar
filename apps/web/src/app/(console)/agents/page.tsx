@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { ist } from "@/lib/format";
-import { Badge, Card, Empty, Mono, PageHeader, Table, Td } from "@/components/ui";
+import { Badge, Card, Empty, Mono, PageHeader, Table, Td, Tr } from "@/components/kit";
 
 type Action = {
   action_id: string; case_id: string | null; agent_id: string; tool_name: string; status: string;
@@ -21,7 +21,7 @@ export default async function AgentsPage({ searchParams }: { searchParams: Promi
       <div className="mb-4 flex flex-wrap gap-2">
         {AGENTS.map((a) => (
           <Link key={a || "all"} href={a ? `/agents?agent=${a}` : "/agents"}
-            className={`rounded-full border px-3 py-1 text-xs ${a === agent ? "border-[var(--accent)] text-[var(--accent)]" : "border-[var(--border)] text-[var(--muted)]"}`}>
+            className={`rounded-full border px-3 py-1 text-xs ${a === agent ? "border-primary text-primary" : "border-border text-muted-foreground"}`}>
             {a || "all agents"}
           </Link>
         ))}
@@ -32,20 +32,20 @@ export default async function AgentsPage({ searchParams }: { searchParams: Promi
         ) : (
           <Table head={["When (IST)", "Agent", "Tool", "Policy", "Result", "Case"]}>
             {data.items.map((a) => (
-              <tr key={a.action_id}>
-                <Td className="whitespace-nowrap text-xs tabular-nums text-[var(--muted)]">{ist(a.created_at)}</Td>
+              <Tr key={a.action_id}>
+                <Td className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{ist(a.created_at)}</Td>
                 <Td>{a.agent_id}</Td>
                 <Td><Mono>{a.tool_name}</Mono></Td>
-                <Td>{a.policy_decision ? <Badge>{a.policy_decision}</Badge> : <span className="text-xs text-[var(--muted)]">read</span>}</Td>
+                <Td>{a.policy_decision ? <Badge>{a.policy_decision}</Badge> : <span className="text-xs text-muted-foreground">read</span>}</Td>
                 <Td><Badge>{a.status}</Badge></Td>
-                <Td className="text-xs text-[var(--muted)]">{a.case_id ?? "—"}</Td>
-              </tr>
+                <Td className="text-xs text-muted-foreground">{a.case_id ?? "—"}</Td>
+              </Tr>
             ))}
           </Table>
         )}
         {data.next_cursor && (
           <div className="mt-4 text-right text-sm">
-            <Link className="text-[var(--accent)]" href={`/agents?${new URLSearchParams({ ...(agent ? { agent } : {}), cursor: data.next_cursor })}`}>Older →</Link>
+            <Link className="text-primary" href={`/agents?${new URLSearchParams({ ...(agent ? { agent } : {}), cursor: data.next_cursor })}`}>Older →</Link>
           </div>
         )}
       </Card>

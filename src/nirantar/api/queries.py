@@ -158,3 +158,61 @@ def customers(conn: Connection, limit: int, cursor: str | None) -> dict[str, Any
                        "(phone_enc IS NOT NULL) AS has_phone, created_at FROM billing.customers WHERE true"
                        f"{cur} ORDER BY created_at DESC, customer_id DESC LIMIT :lim", lim=limit + 1, **params)
     return page(rows, limit, "created_at", "customer_id")
+
+
+# ---------------------------------------------------------------- customers 360 and conversations (P8.3, ADR-0020)
+def customer_360(conn: Connection, tenant_id: str, customer_id: str) -> dict[str, Any] | None:
+    """Everything known about one customer, from the system of record. Contact details stay encrypted; only
+    whether they exist is shown."""
+    c = _rows(conn, "SELECT customer_id, external_ref, display_name, preferred_language, timezone, segment, consents, "
+                    "(phone_enc IS NOT NULL) AS has_phone, (email_enc IS NOT NULL) AS has_email, created_at "
+                    "FROM billing.customers WHERE customer_id=:c", c=customer_id)
+    if not c:
+        return None
+    return {
+        "customer": c[0],
+        "subscriptions": _rows(conn, "SELECT subscription_id, provider, status, amount_minor, currency, interval, "
+                                     "next_charge_on, mandate_id, created_at FROM billing.subscriptions WHERE "
+                                     "customer_id=:c ORDER BY created_at DESC", c=customer_id),
+        "mandates": _rows(conn, "SELECT mandate_id, rail, status, max_amount_minor, valid_until, failure_reason, "
+                                "last_verified_at FROM billing.mandates WHERE customer_id=:c ORDER BY created_at DESC",
+                          c=customer_id),
+        "debits": _rows(conn, "SELECT debit_id, scheduled_for, amount_minor, status, attempt_count, last_error_code "
+                              "FROM billing.debits WHERE customer_id=:c ORDER BY scheduled_for DESC LIMIT 24",
+                        c=customer_id),
+        "cases": _rows(conn, "SELECT case_id, kind, status, opened_at, closed_at, summary->>'outcome' AS outcome "
+                             "FROM ops.cases WHERE customer_id=:c ORDER BY opened_at DESC LIMIT 20", c=customer_id),
+        "contacts": _rows(conn, "SELECT channel, purpose, status, at FROM ops.contacts WHERE customer_id=:c "
+                                "ORDER BY at DESC LIMIT 30", c=customer_id),
+        "actions": _rows(conn, "SELECT a.action_id, a.agent_id, a.tool_name, a.status, a.policy_decision, a.created_at "
+                               "FROM ops.actions a WHERE a.params->>'customer_id' = :c OR a.case_id IN (SELECT case_id "
+                               "FROM ops.cases WHERE customer_id=:c) ORDER BY a.created_at DESC LIMIT 30",
+                         c=customer_id),
+        "replies": _rows(conn, "SELECT value->>'intent' AS intent, value->>'promised_date' AS promised_date, "
+                               "created_at FROM ai.memory WHERE subject_id=:c AND key='customer_reply' "
+                               "ORDER BY created_at DESC LIMIT 10", c=customer_id),
+    }
+
+
+def conversations(conn: Connection, limit: int = 50) -> list[dict[str, Any]]:
+    rows = _rows(conn, "SELECT DISTINCT ON (m.customer_id) m.customer_id, c.display_name, c.preferred_language, "
+                       "m.direction, m.kind, m.status, m.created_at AS last_at, "
+                       "(SELECT max(x.created_at) FROM comms.messages x WHERE x.customer_id=m.customer_id AND "
+                       " x.direction='inbound') AS last_inbound_at, "
+                       "(SELECT count(*) FROM comms.messages x WHERE x.customer_id=m.customer_id) AS messages "
+                       "FROM comms.messages m JOIN billing.customers c ON c.customer_id=m.customer_id "
+                       "WHERE m.customer_id IS NOT NULL ORDER BY m.customer_id, m.created_at DESC")
+    rows.sort(key=lambda r: r["last_at"], reverse=True)          # most recent conversation first
+    return rows[:limit]
+
+
+def thread(conn: Connection, tenant_id: str, customer_id: str) -> list[dict[str, Any]]:
+    from nirantar.core import crypto
+
+    rows = _rows(conn, "SELECT message_id, direction, kind, template_ref, status, error_title, body_enc, evidence_id, "
+                       "created_at FROM comms.messages WHERE customer_id=:c ORDER BY created_at, message_id",
+                 c=customer_id)
+    for r in rows:
+        blob = r.pop("body_enc", None)
+        r["text"] = crypto.decrypt(bytes(blob), tenant_id) if blob else None
+    return rows

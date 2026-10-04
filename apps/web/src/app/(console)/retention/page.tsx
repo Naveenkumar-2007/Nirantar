@@ -1,6 +1,6 @@
 import { api } from "@/lib/api";
 import { ist } from "@/lib/format";
-import { Badge, Card, Empty, Mono, PageHeader, Stat, Table, Td } from "@/components/ui";
+import { Badge, Card, Empty, Mono, PageHeader, Stat, Table, Td, Tr } from "@/components/kit";
 import { RetentionCurve, type CurvePoint } from "./retention-curve";
 import { RefreshButton } from "./refresh-button";
 
@@ -51,7 +51,7 @@ export default async function RetentionPage() {
         <Card title="Retention curve: observed vs fitted (sBG)">
           {sbg ? <>
             <RetentionCurve points={sbg.fit_check.curve} />
-            <p className="mt-2 text-xs text-[var(--muted)]">
+            <p className="mt-2 text-xs text-muted-foreground">
               {sbg.fit_ok ? <Badge tone="good">fit ok</Badge> : <Badge tone="warn">fit loose</Badge>} largest gap {sbg.fit_check.max_abs_error === null ? "—" : pct(sbg.fit_check.max_abs_error)} over periods with ≥30 subscribers.
               Lifetime value = expected future payments × amount, discounted at your retention setting.
             </p>
@@ -65,14 +65,14 @@ export default async function RetentionPage() {
                 <li key={name} className="text-sm">
                   <div className="flex items-center justify-between gap-2"><span className="font-medium">{TITLE[name]}</span>
                     {!m ? <Badge tone="neutral">not trained yet</Badge> : <Badge tone={m.stage === "champion" ? "good" : m.stage === "rejected" ? "bad" : "info"}>{m.stage}</Badge>}</div>
-                  {m && <p className="mt-1 text-xs text-[var(--muted)]">
+                  {m && <p className="mt-1 text-xs text-muted-foreground">
                     learned AUC {m.metrics.auc?.toFixed(3)} / Brier {m.metrics.brier?.toFixed(4)} vs {String(m.baseline.algorithm)} AUC {Number(m.baseline.auc).toFixed(3)} / Brier {Number(m.baseline.brier).toFixed(4)}
                     {!m.gates.passed && <> — {m.gates.failures.join("; ")}</>}</p>}
                 </li>
               );
             })}
           </ul>
-          <p className="mt-3 text-xs text-[var(--muted)]">
+          <p className="mt-3 text-xs text-muted-foreground">
             Until a model is promoted, churn risk comes from the sBG tenure baseline and the reason from the calibrated payment-trouble rule{r.fit?.type_rule ? ` (${pct(r.fit.type_rule.p_trouble, 0)} payment-driven with recent trouble vs ${pct(r.fit.type_rule.p_clean, 0)} without)` : ""}.
           </p>
         </Card>
@@ -86,16 +86,16 @@ export default async function RetentionPage() {
           ) : (
             <Table head={["Subscription", "60-day churn risk", "Payment-driven?", "Suggested route", "Monthly value"]}>
               {r.at_risk.items.slice(0, 50).map((x) => (
-                <tr key={x.entity_id}>
+                <Tr key={x.entity_id}>
                   <Td><Mono>{x.entity_id}</Mono></Td><Td className="tabular-nums">{pct(x.p_churn_60d)}</Td>
                   <Td className="tabular-nums">{x.p_payment_driven === null ? "—" : pct(x.p_payment_driven, 0)}</Td>
                   <Td>{x.route === "fix_payment" ? <Badge tone="warn">fix payment method</Badge> : <Badge tone="info">retention offer</Badge>}</Td>
                   <Td className="tabular-nums">{inr(x.monthly_value_minor)}</Td>
-                </tr>
+                </Tr>
               ))}
             </Table>
           )}
-        {r.at_risk && <p className="mt-2 text-xs text-[var(--muted)]">Scored {ist(r.at_risk.computed_at)} · {r.at_risk.summary.unscored} not scorable (no model or baseline yet).</p>}
+        {r.at_risk && <p className="mt-2 text-xs text-muted-foreground">Scored {ist(r.at_risk.computed_at)} · {r.at_risk.summary.unscored} not scorable (no model or baseline yet).</p>}
       </Card>
 
       <Card title="Win-back experiments (randomised, with holdout)" className="mt-4">
@@ -103,17 +103,17 @@ export default async function RetentionPage() {
           <div className="space-y-4">
             {r.winback.map((w) => (
               <div key={w.experiment_id}>
-                <div className="mb-1 text-sm font-medium">{w.stratum === "involuntary" ? "Left after payment trouble" : "Left by choice"} <span className="text-xs text-[var(--muted)]">holdout {w.holdout_bp / 100}% · <Mono>{w.experiment_id}</Mono></span></div>
+                <div className="mb-1 text-sm font-medium">{w.stratum === "involuntary" ? "Left after payment trouble" : "Left by choice"} <span className="text-xs text-muted-foreground">holdout {w.holdout_bp / 100}% · <Mono>{w.experiment_id}</Mono></span></div>
                 <Table head={["Arm", "Customers", "Came back", "Revenue", "vs holdout (95% CI)"]}>
                   {Object.entries(w.arms).map(([arm, s]) => {
                     const inc = w.incremental?.[arm];
                     return (
-                      <tr key={arm}>
+                      <Tr key={arm}>
                         <Td><Mono>{arm}</Mono></Td><Td className="tabular-nums">{s.n}</Td><Td className="tabular-nums">{pct(s.recovery_rate)}</Td>
                         <Td className="tabular-nums">{inr(s.value_minor)}</Td>
-                        <Td className="text-xs">{arm === "holdout" ? "—" : !inc ? (w.note ?? "not enough data") :
+                        <Td wrap className="text-xs">{arm === "holdout" ? "—" : !inc ? (w.note ?? "not enough data") :
                           <>{inc.incremental_recovery_rate >= 0 ? "+" : ""}{pct(inc.incremental_recovery_rate)} ({pct(inc.ci95[0])} … {pct(inc.ci95[1])}) {inc.significant ? <Badge tone="good">significant</Badge> : <Badge tone="neutral">not significant</Badge>}</>}</Td>
-                      </tr>
+                      </Tr>
                     );
                   })}
                 </Table>
@@ -121,7 +121,7 @@ export default async function RetentionPage() {
             ))}
           </div>
         )}
-        <p className="mt-2 text-xs text-[var(--muted)]">
+        <p className="mt-2 text-xs text-muted-foreground">
           Cases: {Object.entries(r.cases).map(([k, v]) => `${v} ${k}`).join(" · ") || "none"} · Offers: {Object.entries(r.offers).map(([k, v]) => `${v} ${k}`).join(" · ") || "none"}.
           Win-back messages are promotional: sent only with promotional consent, inside contact windows, with an opt-out; discounts above your policy threshold need a second person&apos;s approval.
         </p>

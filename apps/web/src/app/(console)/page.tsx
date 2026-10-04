@@ -1,7 +1,9 @@
 import Link from "next/link";
+import { ArrowRight, BadgeIndianRupee, ClipboardCheck, ShieldAlert, Wallet } from "lucide-react";
 import { api } from "@/lib/api";
 import { inr, pct } from "@/lib/format";
-import { Badge, Card, Empty, PageHeader, Stat, Table, Td } from "@/components/ui";
+import { Badge, Card, Empty, PageHeader, Stat } from "@/components/kit";
+import { Button } from "@/components/ui/button";
 
 type Inc = {
   incremental_recovery_rate: number; ci95: [number, number]; incremental_value_per_customer_minor: number;
@@ -22,80 +24,114 @@ type Overview = {
   };
 };
 
+/* Proportion bar: thin mark, rounded data-end, value labelled in text ink (never colour-only). */
+function Meter({ label, value, max, display, series = 1 }: {
+  label: React.ReactNode; value: number; max: number; display: string; series?: number;
+}) {
+  const w = max > 0 ? Math.max(2, (value / max) * 100) : 0;
+  return (
+    <div className="group">
+      <div className="mb-1 flex items-center justify-between gap-3 text-sm">
+        <span className="min-w-0 truncate">{label}</span>
+        <span className="tabular-nums text-muted-foreground">{display}</span>
+      </div>
+      <div className="h-2 rounded-full bg-muted" role="img" aria-label={display}>
+        <div className="h-2 rounded-full transition-all group-hover:opacity-80"
+          style={{ width: `${w}%`, background: `var(--series-${series})` }} />
+      </div>
+    </div>
+  );
+}
+
+const STATUS_ORDER = ["succeeded", "attempting", "notified", "scheduled", "failed", "cancelled"];
+const rank = (s: string) => (STATUS_ORDER.includes(s) ? STATUS_ORDER.indexOf(s) : 99);
+
 export default async function OverviewPage() {
   const o = await api<Overview>("/v1/overview");
   const succeeded = o.debits.by_status["succeeded"];
   const exp = o.experiment;
+  const arms = exp ? Object.entries(exp.analysis.arms) : [];
+  const actions = Object.entries(o.agent_actions_30d).sort((a, b) => b[1] - a[1]);
+  const maxAction = Math.max(0, ...actions.map(([, n]) => n));
+  const statuses = Object.entries(o.debits.by_status).sort((a, b) => rank(a[0]) - rank(b[0]));
   return (
     <>
-      <PageHeader title="Overview" subtitle="What the agents did, and what it verifiably earned" />
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Stat label="Debits" value={o.debits.total} hint={`${succeeded?.n ?? 0} collected · ${inr(succeeded?.amount_minor)}`} />
-        <Stat label="Failed at debit" value={o.failed_debits} hint="provider-reported failures" />
-        <Stat label="Recovered (verified)" value={inr(o.recovered.amount_minor)} hint={`${o.recovered.count} debits · rate ${pct(o.recovery_rate)}`} />
-        <Stat label="Needs a human" value={o.pending_approvals} hint={`${o.open_cases} open cases`} />
+      <PageHeader eyebrow="Overview" title="Revenue, protected and proven"
+        subtitle="What Nirantar's agents did and what it verifiably earned — every rupee here is confirmed with your payment provider and the ledger."
+        right={<Button asChild variant="outline" size="sm"><Link href="/approvals">Review approvals<ArrowRight /></Link></Button>} />
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Stat emphasis label="Recovered (verified)" icon={<BadgeIndianRupee />} value={inr(o.recovered.amount_minor)}
+          hint={`${o.recovered.count} debits · recovery rate ${pct(o.recovery_rate)}`} />
+        <Stat label="Collected on schedule" icon={<Wallet />} value={inr(succeeded?.amount_minor)}
+          hint={`${succeeded?.n ?? 0} of ${o.debits.total} debits`} />
+        <Stat label="Failed at debit" icon={<ShieldAlert />} value={o.failed_debits} hint="provider-reported failures" />
+        <Stat label="Needs a person" icon={<ClipboardCheck />} value={o.pending_approvals}
+          hint={`${o.open_cases} open cases`} />
       </div>
 
-      <div className="mt-6 grid gap-4 lg:grid-cols-3">
-        <Card title="Incremental impact vs randomized holdout" className="lg:col-span-2">
+      <div className="mt-6 grid gap-4 xl:grid-cols-3">
+        <Card title="Incremental impact" className="xl:col-span-2"
+          description="Treatment vs a randomised holdout — the only honest way to know what the agents added."
+          action={exp && <Badge tone="info">{exp.name}</Badge>}>
           {!exp ? (
-            <Empty title="No experiment running" hint="Create a holdout experiment to measure incremental recovery." />
+            <Empty title="No experiment running" hint="Start a holdout experiment to measure what recovery actions add." />
           ) : (
-            <>
-              <div className="mb-3 text-sm text-[var(--muted)]">
-                Experiment <span className="font-medium text-[var(--fg)]">{exp.name}</span> · only verifier-confirmed outcomes count
-              </div>
-              <Table head={["Arm", "Customers", "Recovered or paid", "Verified ₹"]}>
-                {Object.entries(exp.analysis.arms).map(([arm, a]) => (
-                  <tr key={arm}>
-                    <Td><Badge tone={arm === "holdout" ? "neutral" : "info"}>{arm}</Badge></Td>
-                    <Td className="tabular-nums">{a.n}</Td>
-                    <Td className="tabular-nums">{pct(a.recovery_rate)}</Td>
-                    <Td className="tabular-nums">{inr(a.value_minor)}</Td>
-                  </tr>
+            <div className="space-y-5">
+              <div className="space-y-3">
+                {arms.map(([arm, a]) => (
+                  <Meter key={arm} series={arm === "holdout" ? 2 : 1} value={a.recovery_rate} max={1}
+                    label={<span className="flex items-center gap-2"><span className="font-medium capitalize">{arm}</span>
+                      <span className="text-xs text-muted-foreground">{a.n} customers · {inr(a.value_minor)}</span></span>}
+                    display={`${pct(a.recovery_rate)} recovered`} />
                 ))}
-              </Table>
+              </div>
               {exp.analysis.incremental && Object.keys(exp.analysis.incremental).length > 0 ? (
                 Object.entries(exp.analysis.incremental).map(([arm, inc]) => (
-                  <p key={arm} className="mt-3 text-sm">
-                    <span className="font-medium">{arm}</span>: {pct(inc.incremental_recovery_rate)} points
-                    (95% CI {pct(inc.ci95[0])} to {pct(inc.ci95[1])}),
-                    ≈ {inr(inc.incremental_value_total_minor)} incremental.{" "}
-                    <Badge tone={inc.significant ? "good" : "warn"}>{inc.significant ? "significant" : "not yet significant"}</Badge>
-                  </p>
+                  <div key={arm} className="rounded-lg border border-border bg-muted/40 p-4">
+                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                      <span className="text-2xl font-semibold tracking-tight">
+                        {inc.incremental_recovery_rate >= 0 ? "+" : ""}{pct(inc.incremental_recovery_rate)}
+                      </span>
+                      <span className="text-sm text-muted-foreground">recovery points from <b className="font-medium text-foreground">{arm}</b></span>
+                      <Badge tone={inc.significant ? "good" : "warn"}>{inc.significant ? "significant" : "not yet significant"}</Badge>
+                    </div>
+                    <div className="mt-1 text-sm text-muted-foreground">
+                      95% CI {pct(inc.ci95[0])} to {pct(inc.ci95[1])} · ≈ {inr(inc.incremental_value_total_minor)} incremental
+                    </div>
+                  </div>
                 ))
               ) : (
-                <p className="mt-3 text-sm text-[var(--muted)]">{exp.analysis.note ?? "Not enough data for an incrementality estimate yet."}</p>
+                <p className="text-sm text-muted-foreground">{exp.analysis.note ?? "Not enough data for an incrementality estimate yet."}</p>
               )}
-            </>
+            </div>
           )}
         </Card>
-        <Card title="Agent actions, last 30 days">
-          {Object.keys(o.agent_actions_30d).length === 0 ? (
-            <Empty title="No agent actions yet" />
-          ) : (
-            <ul className="space-y-2">
-              {Object.entries(o.agent_actions_30d).map(([s, n]) => (
-                <li key={s} className="flex items-center justify-between text-sm">
-                  <Badge>{s}</Badge><span className="tabular-nums">{n}</span>
-                </li>
+
+        <Card title="Agent actions" description="Last 30 days, by outcome"
+          action={<Button asChild variant="ghost" size="sm"><Link href="/agents">Activity<ArrowRight /></Link></Button>}>
+          {actions.length === 0 ? <Empty title="No agent actions yet" /> : (
+            <div className="space-y-3">
+              {actions.map(([s, n]) => (
+                <Meter key={s} value={n} max={maxAction} display={String(n)}
+                  label={<Badge>{s.replaceAll("_", " ")}</Badge>} />
               ))}
-            </ul>
+            </div>
           )}
-          <Link href="/agents" className="mt-4 inline-block text-sm text-[var(--accent)]">See agent activity →</Link>
         </Card>
       </div>
 
-      <Card title="Debits by status" className="mt-6">
-        <Table head={["Status", "Count", "Amount"]}>
-          {Object.entries(o.debits.by_status).map(([s, v]) => (
-            <tr key={s}>
-              <Td><Link href={`/debits?status=${s}`}><Badge>{s}</Badge></Link></Td>
-              <Td className="tabular-nums">{v.n}</Td>
-              <Td className="tabular-nums">{inr(v.amount_minor)}</Td>
-            </tr>
-          ))}
-        </Table>
+      <Card title="Debits by status" className="mt-6" description={`${o.debits.total} debits in total`}>
+        {statuses.length === 0 ? <Empty title="No debits yet" hint="They appear once your history is imported." /> : (
+          <div className="grid gap-x-8 gap-y-4 md:grid-cols-2">
+            {statuses.map(([s, v]) => (
+              <Link key={s} href={`/debits?status=${s}`} className="-m-1 rounded-md p-1 hover:bg-accent/60">
+                <Meter value={v.n} max={o.debits.total} display={`${v.n} · ${inr(v.amount_minor)}`}
+                  label={<Badge>{s}</Badge>} />
+              </Link>
+            ))}
+          </div>
+        )}
       </Card>
     </>
   );

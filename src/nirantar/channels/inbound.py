@@ -30,6 +30,7 @@ from sqlalchemy import Engine, text
 from nirantar.channels.sink import phone_hash
 from nirantar.channels.whatsapp import InboundMessage, StatusUpdate, WhatsAppCloud, WhatsAppError, parse_webhook
 from nirantar.contracts.events import make_event
+from nirantar.core import crypto
 from nirantar.db.session import tenant_tx
 from nirantar.db.stores import Outbox
 
@@ -153,6 +154,10 @@ def process_whatsapp(engine: Engine, payload: dict[str, Any], *, wa: WhatsAppClo
                 attachment = {"error": str(exc)[:200]}
         opted_out = bool(STOP.match(reply))
         with tenant_tx(tenant, engine) as c:
+            # the inbox shows what the customer said (voice notes: the redacted transcript), encrypted at rest
+            c.execute(text("UPDATE comms.messages SET body_enc=:b, evidence_id=:e WHERE message_id=:m"),
+                      {"b": crypto.encrypt(reply, tenant) if reply else None,
+                       "e": attachment.get("evidence_id"), "m": m.message_id})
             if opted_out:
                 consents = cust.consents if isinstance(cust.consents, dict) else json.loads(cust.consents or "{}")
                 consents["opted_out"] = sorted({*consents.get("opted_out", []), "whatsapp"})

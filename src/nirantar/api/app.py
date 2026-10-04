@@ -193,6 +193,32 @@ def create_app(svc: Services | None = None) -> FastAPI:
                   c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
         return queries.customers(c, limit, cursor)
 
+    @app.get("/v1/customers/{customer_id}")
+    def customer_detail(customer_id: str, p: Principal = Depends(require(Permission.READ)),
+                        c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        d = queries.customer_360(c, p.tenant_id, customer_id)
+        if d is None:
+            raise HTTPException(404, "customer not found")
+        return d
+
+    @app.get("/v1/conversations")
+    def conversation_list(limit: int = Query(50, ge=1, le=MAX_LIMIT), c: Connection = Depends(tenant_conn)
+                          ) -> dict[str, Any]:
+        return {"items": queries.conversations(c, limit)}
+
+    @app.get("/v1/conversations/{customer_id}")
+    def conversation_thread(customer_id: str, p: Principal = Depends(require(Permission.READ)),
+                            c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        """The WhatsApp thread with one customer. Bodies are decrypted only here, for members with read access."""
+        cust = c.execute(text("SELECT display_name, preferred_language FROM billing.customers WHERE customer_id=:c"),
+                         {"c": customer_id}).one_or_none()
+        if cust is None:
+            raise HTTPException(404, "customer not found")
+        msgs = queries.thread(c, p.tenant_id, customer_id)
+        last_in = max((m["created_at"] for m in msgs if m["direction"] == "inbound"), default=None)
+        return {"customer_id": customer_id, "display_name": cust.display_name, "language": cust.preferred_language,
+                "window_open_until": (last_in + timedelta(hours=24)) if last_in else None, "messages": msgs}
+
     @app.get("/v1/agents/activity")
     def activity(limit: int = Query(50, ge=1, le=MAX_LIMIT), cursor: str | None = None, agent: str | None = None,
                  c: Connection = Depends(tenant_conn)) -> dict[str, Any]:

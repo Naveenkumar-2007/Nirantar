@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
+from nirantar.api import queries
 from nirantar.billing.service import (
     NewCustomer,
     connect_provider,
@@ -191,6 +192,20 @@ def test_window_templates_inbound_voice_stop_and_statuses(app_engine: Engine, gr
     assert process_whatsapp(app_engine, json.loads(_webhook(messages=[{
         "from": "919999999999", "id": "wamid.x", "timestamp": _ts(), "type": "text", "text": {"body": "hi"}}])),
         wa=wa).unmatched == 1
+
+    # the Conversations inbox: bodies are stored encrypted and read back only through the tenant key
+    with tenant_tx(t, app_engine) as c:
+        raw = c.execute(text("SELECT body_enc FROM comms.messages WHERE body_enc IS NOT NULL")).scalars().all()
+        inbox = queries.conversations(c)
+        msgs = queries.thread(c, t, cust)
+    assert raw and all(b"Thanks, noted." not in bytes(b) for b in raw)
+    assert [i["customer_id"] for i in inbox] == [cust] and inbox[0]["last_inbound_at"] is not None
+    by_kind = {(m["direction"], m["kind"]): m for m in msgs}
+    assert by_kind[("outbound", "template")]["status"] == "read"
+    voice = by_kind[("inbound", "audio")]
+    assert "kal pay" in voice["text"] and "482913" not in voice["text"] and voice["evidence_id"]
+    assert any(m["direction"] == "outbound" and m["text"] == "Thanks, noted." for m in msgs)
+    assert [m["created_at"] for m in msgs] == sorted(m["created_at"] for m in msgs)
 
 
 def test_spoken_acknowledgement_through_the_gateway(app_engine: Engine, graph: FakeGraph, wa: WhatsAppCloud,

@@ -21,20 +21,20 @@ export function BusinessForm() {
       <label className="block">
         <span className="text-sm font-medium">Business name</span>
         <input name="name" required minLength={2} maxLength={80} autoComplete="organization"
-          className="mt-1 block w-full rounded-md border border-[var(--border)] bg-transparent px-3 py-2 text-sm outline-none focus:border-[var(--accent)]" />
+          className="mt-1 block w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:border-ring" />
       </label>
       <label className="block">
         <span className="text-sm font-medium">What do you sell?</span>
         <select name="segment" defaultValue="subscription"
-          className="mt-1 block w-full rounded-md border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)]">
+          className="mt-1 block w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-ring">
           {SEGMENTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select>
       </label>
       <button disabled={pending}
-        className="w-full rounded-md bg-[var(--accent)] px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50">
+        className="w-full rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground disabled:opacity-50">
         {pending ? "Creating…" : "Create business"}
       </button>
-      {state && !state.ok && <p role="alert" className="text-sm text-[var(--bad-fg)]">{state.message}</p>}
+      {state && !state.ok && <p role="alert" className="text-sm text-danger">{state.message}</p>}
     </form>
   );
 }

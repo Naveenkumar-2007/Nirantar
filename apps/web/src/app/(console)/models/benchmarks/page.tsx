@@ -1,6 +1,6 @@
 import { api } from "@/lib/api";
 import { pct } from "@/lib/format";
-import { Badge, Card, Empty, PageHeader, Table, Td } from "@/components/ui";
+import { Badge, Card, Empty, PageHeader, Table, Td, Tr } from "@/components/kit";
 
 type Metrics = Record<string, number>;
 type Models = {
@@ -28,20 +28,20 @@ export default async function BenchmarksPage() {
             <p className="mb-2 text-sm"><Badge tone={m.ml.m1.gate_passed ? "good" : "bad"}>{m.ml.m1.gate_passed ? "gate passed" : "gate failed"}</Badge> champion v{m.ml.m1.champion_version ?? "—"} · source {m.ml.data_source}</p>
             <Table head={["Metric", "Logistic baseline", "LightGBM + isotonic"]}>
               {["auc", "pr_auc", "brier", "ece"].map((k) => (
-                <tr key={k}><Td>{k}</Td><Td className="tabular-nums">{n(m.ml!.m1.baseline[k])}</Td><Td className="tabular-nums">{n(m.ml!.m1.advanced[k])}</Td></tr>
+                <Tr key={k}><Td>{k}</Td><Td className="tabular-nums">{n(m.ml!.m1.baseline[k])}</Td><Td className="tabular-nums">{n(m.ml!.m1.advanced[k])}</Td></Tr>
               ))}
             </Table>
           </Card>
           <Card title="M4 bank health">
             <p className="mb-2 text-sm">Champion: <Badge tone="good">{m.ml.m4.champion ?? "none"}</Badge></p>
             <Table head={["Detector", "Recall", "False alarms / bank-week"]}>
-              <tr><Td>EWMA z-score</Td><Td>{pct(m.ml.m4.ewma.incident_recall)}</Td><Td>{n(m.ml.m4.ewma.false_alarms_per_bank_week, 2)}</Td></tr>
-              <tr><Td>BOCPD</Td><Td>{pct(m.ml.m4.bocpd.incident_recall)}</Td><Td>{n(m.ml.m4.bocpd.false_alarms_per_bank_week, 2)}</Td></tr>
+              <Tr><Td>EWMA z-score</Td><Td>{pct(m.ml.m4.ewma.incident_recall)}</Td><Td>{n(m.ml.m4.ewma.false_alarms_per_bank_week, 2)}</Td></Tr>
+              <Tr><Td>BOCPD</Td><Td>{pct(m.ml.m4.bocpd.incident_recall)}</Td><Td>{n(m.ml.m4.bocpd.false_alarms_per_bank_week, 2)}</Td></Tr>
             </Table>
           </Card>
           <Card title="M5 uplift">
             <p className="text-sm"><Badge tone={m.ml.m5.mode === "promoted" ? "good" : "warn"}>{m.ml.m5.mode}</Badge></p>
-            <ul className="mt-2 list-disc pl-5 text-xs text-[var(--muted)]">{m.ml.m5.reasons.map((r) => <li key={r}>{r}</li>)}</ul>
+            <ul className="mt-2 list-disc pl-5 text-xs text-muted-foreground">{m.ml.m5.reasons.map((r) => <li key={r}>{r}</li>)}</ul>
           </Card>
           <Card title="M10 cash forecast">
             <p className="text-sm"><Badge tone={m.ml.m10.gate_passed ? "good" : "bad"}>{m.ml.m10.gate_passed ? "gate passed" : "gate failed"}</Badge></p>
@@ -53,7 +53,7 @@ export default async function BenchmarksPage() {
         <Card title="RAG retrieval">
           {!m.rag ? <Empty title="Not run" hint="uv run python -m nirantar.rag.evaluate" /> : (
             <Table head={["Variant", `Recall@${m.rag.k}`, "MRR"]}>
-              {Object.entries(m.rag.variants).map(([v, r]) => (<tr key={v}><Td>{v}</Td><Td>{pct(r.recall_at_k)}</Td><Td>{n(r.mrr)}</Td></tr>))}
+              {Object.entries(m.rag.variants).map(([v, r]) => (<Tr key={v}><Td>{v}</Td><Td>{pct(r.recall_at_k)}</Td><Td>{n(r.mrr)}</Td></Tr>))}
             </Table>
           )}
         </Card>
@@ -61,7 +61,7 @@ export default async function BenchmarksPage() {
           {!m.voice ? <Empty title="Not run" hint="uv run python -m nirantar.voice.benchmark" /> : (
             <>
               <Table head={["Language", "Intent agreement", "Raw CER"]}>
-                {Object.entries(m.voice.languages).map(([l, v]) => (<tr key={l}><Td>{l}</Td><Td>{pct(v.intent_agreement, 0)}</Td><Td>{n(v.mean_cer)}</Td></tr>))}
+                {Object.entries(m.voice.languages).map(([l, v]) => (<Tr key={l}><Td>{l}</Td><Td>{pct(v.intent_agreement, 0)}</Td><Td>{n(v.mean_cer)}</Td></Tr>))}
               </Table>
               <p className="mt-2 text-sm">Turn latency {m.voice.turn.total_ms} ms (target {m.voice.turn.target_ms} ms)</p>
             </>

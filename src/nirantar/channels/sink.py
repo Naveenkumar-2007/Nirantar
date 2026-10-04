@@ -81,10 +81,11 @@ class ChannelSink:
                 template_ref: str | None, at: datetime) -> None:
         with tenant_tx(tenant_id, self.engine) as c:
             c.execute(text("INSERT INTO comms.messages (tenant_id, message_id, customer_id, channel, direction, kind, "
-                           "template_ref, status, body_sha256, created_at, updated_at) VALUES (:t, :m, :c, 'whatsapp', "
-                           "'outbound', :k, :tr, 'sent', :h, :n, :n) ON CONFLICT DO NOTHING"),
+                           "template_ref, status, body_sha256, body_enc, created_at, updated_at) VALUES (:t, :m, :c, "
+                           "'whatsapp', 'outbound', :k, :tr, 'sent', :h, :b, :n, :n) ON CONFLICT DO NOTHING"),
                       {"t": tenant_id, "m": mid, "c": customer_id, "k": kind, "tr": template_ref,
-                       "h": hashlib.sha256(body.encode()).hexdigest(), "n": at})
+                       "h": hashlib.sha256(body.encode()).hexdigest(), "b": crypto.encrypt(body, tenant_id),
+                       "n": at})
         with self.engine.begin() as c:
             c.execute(text("INSERT INTO comms.wa_message_ids (message_id, tenant_id) VALUES (:m, :t) "
                            "ON CONFLICT DO NOTHING"), {"m": mid, "t": tenant_id})

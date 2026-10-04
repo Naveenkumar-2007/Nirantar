@@ -5,7 +5,7 @@ import { decideTemplate, proposeTemplate, type FormResult } from "./actions";
 
 function Status({ state }: { state: FormResult | null }) {
   if (!state) return null;
-  return <span role="status" className={`text-xs ${state.ok ? "text-[var(--good-fg)]" : "text-[var(--bad-fg)]"}`}>{state.message}</span>;
+  return <span role="status" className={`text-xs ${state.ok ? "text-success" : "text-danger"}`}>{state.message}</span>;
 }
 
 export function ProposeForm({ tkey, language, body, allowed }: { tkey: string; language: string; body: string; allowed: string[] }) {
@@ -16,12 +16,12 @@ export function ProposeForm({ tkey, language, body, allowed }: { tkey: string; l
       <input type="hidden" name="language" value={language} />
       <label className="sr-only" htmlFor={`${tkey}-${language}-body`}>New wording</label>
       <textarea id={`${tkey}-${language}-body`} name="body" defaultValue={body} rows={3} required
-        className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm" />
+        className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" />
       <div className="flex flex-wrap items-center gap-2">
-        <button disabled={pending} className="rounded-md border border-[var(--border)] px-3 py-1.5 text-sm disabled:opacity-50">
+        <button disabled={pending} className="rounded-md border border-border px-3 py-1.5 text-sm disabled:opacity-50">
           {pending ? "Checking…" : "Submit for review"}
         </button>
-        <span className="text-xs text-[var(--muted)]">Placeholders: {allowed.length ? allowed.map((a) => `{${a}}`).join(" ") : "none"}</span>
+        <span className="text-xs text-muted-foreground">Placeholders: {allowed.length ? allowed.map((a) => `{${a}}`).join(" ") : "none"}</span>
         <Status state={state} />
       </div>
     </form>
@@ -36,9 +36,9 @@ export function ReviewButtons({ tkey, language, version }: { tkey: string; langu
       <input type="hidden" name="language" value={language} />
       <input type="hidden" name="version" value={version} />
       <button name="grant" value="true" disabled={pending}
-        className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">Approve &amp; publish</button>
+        className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50">Approve &amp; publish</button>
       <button name="grant" value="false" disabled={pending}
-        className="rounded-md border border-[var(--border)] px-3 py-1.5 text-sm disabled:opacity-50">Reject</button>
+        className="rounded-md border border-border px-3 py-1.5 text-sm disabled:opacity-50">Reject</button>
       <Status state={state} />
     </form>
   );

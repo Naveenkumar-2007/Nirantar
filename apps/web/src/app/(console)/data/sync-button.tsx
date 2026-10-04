@@ -8,10 +8,10 @@ export function SyncButton() {
   return (
     <form action={action} className="flex flex-wrap items-center gap-2">
       <button disabled={pending}
-        className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">
+        className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50">
         {pending ? "Starting…" : "Sync now"}
       </button>
-      {state && <span role="status" className={`text-xs ${state.ok ? "text-[var(--good-fg)]" : "text-[var(--bad-fg)]"}`}>{state.message}</span>}
+      {state && <span role="status" className={`text-xs ${state.ok ? "text-success" : "text-danger"}`}>{state.message}</span>}
     </form>
   );
 }

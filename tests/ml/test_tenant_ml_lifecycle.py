@@ -135,8 +135,14 @@ def test_learn_shadow_canary_champion_rollback_and_drift(app_engine: Engine, lak
     moves = rollout.evaluate_rollout(app_engine, tenant, now=NOW + timedelta(hours=1))
     assert [(m["from"], m["to"]) for m in moves] == [("shadow", "canary")], moves
     assert moves[0]["evidence"]["ci95"][1] <= 0.002
-    _live_batch(app_engine, router, tenant, 260, seed=2, at=NOW + timedelta(hours=2))
-    moves = rollout.evaluate_rollout(app_engine, tenant, now=NOW + timedelta(hours=3))
+    # Canary routing hashes the (random) tenant id, so one batch yields ~208 ± 6 comparable pairs against a gate of
+    # 200: sometimes the gate rightly waits for more evidence. Keep feeding live outcomes, as production would.
+    for k, seed in enumerate((2, 20, 21)):
+        _live_batch(app_engine, router, tenant, 260, seed=seed, at=NOW + timedelta(hours=2, minutes=20 * k))
+        moves = rollout.evaluate_rollout(app_engine, tenant, now=NOW + timedelta(hours=2, minutes=20 * k + 10))
+        if moves:
+            break
+        assert _stage(app_engine, tenant, version) == "canary"              # waiting, never silently dropped
     assert [(m["from"], m["to"]) for m in moves] == [("canary", "champion")], moves
     with tenant_tx(tenant, app_engine) as c:
         dec = router.score(c, tenant, subject_id="deb_check", entity_id="sub_any",

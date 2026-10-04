@@ -234,3 +234,19 @@ def test_dead_letter_replay_republishes_the_original_event(demo: dict[str, Any],
                             {"e": ev.event_id}).scalar_one() is None                  # the relay will re-deliver it
     audit = c.get("/v1/audit?limit=5", headers=h(demo["api_keys"]["owner"])).json()["items"]
     assert any(a["action"] == "event.replayed" for a in audit)
+
+
+def test_customer_360_hides_contact_details_and_respects_tenancy(demo: dict[str, Any]) -> None:
+    c: TestClient = demo["client"]
+    key = h(demo["api_keys"]["viewer"])
+    cust = c.get("/v1/customers?limit=1", headers=key).json()["items"][0]
+    d = c.get(f"/v1/customers/{cust['customer_id']}", headers=key).json()
+    assert d["customer"]["customer_id"] == cust["customer_id"]
+    assert {"subscriptions", "mandates", "debits", "cases", "contacts", "actions", "replies"} <= d.keys()
+    assert d["subscriptions"] and d["debits"], "the seeded customer has a plan and debits"
+    assert d["customer"]["has_phone"] is True
+    flat = str(d)
+    assert "phone_enc" not in flat and "+91" not in flat                     # only "has a phone", never the number
+    theirs = c.get("/v1/customers?limit=1", headers=h(demo["other"]["api_keys"]["owner"])).json()["items"][0]
+    assert c.get(f"/v1/customers/{theirs['customer_id']}", headers=key).status_code == 404
+    assert c.get("/v1/conversations", headers=key).json()["items"] == []    # the mock channel keeps no WhatsApp log

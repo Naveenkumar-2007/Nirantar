@@ -155,5 +155,7 @@ ways, STOP, statuses) — ADR-0017; SMS on hold, phone calls deferred.
 P8 step 1: sign-in (Keycloak OIDC, encrypted sessions, memberships, self-onboarding) — ADR-0018.
 P8.2 self-serve onboarding: merchant secrets encrypted per tenant, verified Razorpay connect, setup wizard,
 history import via OnboardingWorkflow, team invites (verified email only), business switcher — ADR-0019.
-Next: P8 platform (OIDC, onboarding UI, billing,
-self-host packaging, CI).
+P8.3 design system: shadcn (radix, nova) on one token set with validated chart palettes for light and dark,
+sidebar shell with business switcher and theme menu, status shown with mark + word; Customers, Customer 360 and
+a Conversations inbox (WhatsApp bodies encrypted with the tenant key, migration 0022) — ADR-0020.
+Next: P8.4 public URL (inbound webhooks), P8.5 billing/site/docs, P8.6 CI + Playwright + 72 h soak + Helm.
