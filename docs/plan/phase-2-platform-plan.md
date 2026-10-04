@@ -212,7 +212,7 @@ GitHub Actions: lint/type/tests (unit, integration with services, e2e), import b
 | **P5 Always-on services & workflows** ◐ built (ADR-0015: services, Dispute/Onboarding/Reconciliation/MandateHealth workflows, DLQ replay, replay-tested versioning, runbook; Retrain = Dagster; CustomerLifecycle deliberately not built; open: 72 h soak; Collections/Treasury gated) | 8–10 | Relay, event bridge, workers, all workflows in §9, reconciliation schedule | 72-hour soak test with RecurSim traffic, zero lost events |
 | **P6 Real channels** ◐ (ADR-0017: WhatsApp + Sarvam voice notes done; SMS on hold (DLT); calls deferred; inbound live needs public URL) | 10–12 | WhatsApp Cloud API (test number), LiveKit + Sarvam streaming voice + SIP, inbound multimodal, hosted customer pages | Real messages/calls end to end in sandbox |
 | **P7 Real protocols** ✅ (ADR-0016; real-client interop pending a public URL in P8) | 12–13 | MCP server (OAuth), A2A v1.0 endpoints + agent cards | External MCP/A2A clients complete tasks through policy |
-| **P8 Platform & website** ◐ (sign-in — ADR-0018; self-serve onboarding — ADR-0019; next: design system, public URL, billing, CI) | 13–16 | OIDC (Zitadel), orgs/teams, onboarding wizard, Customers 360, Conversations, Developers, Billing, public website, docs; CI with all gates; Helm/Compose self-host | A new business self-onboards in < 30 minutes |
+| **P8 Platform & website** ◐ (sign-in — ADR-0018; self-serve onboarding — ADR-0019; design system, Customer 360, Conversations — ADR-0020; next: public URL, billing, CI) | 13–16 | OIDC (Zitadel), orgs/teams, onboarding wizard, Customers 360, Conversations, Developers, Billing, public website, docs; CI with all gates; Helm/Compose self-host | A new business self-onboards in < 30 minutes |
 
 ## 15. What is needed from the product owner
 1. Razorpay **technology-partner OAuth app** (development client) — or keep test keys for now.
@@ -220,3 +220,57 @@ GitHub Actions: lint/type/tests (unit, integration with services, e2e), import b
 3. Telephony: an Exotel trial or any SIP trunk for LiveKit.
 4. A **design partner** (even a small subscription business) for real history — the single biggest step from "working" to "proven".
 5. A compliance reviewer to write the RAG evaluation questions and review templates.
+
+
+---
+
+## 16. The recovery brief — "find revenue that's slipping away and win it back"
+
+Product-owner brief (2026-10-04): an agent that **detects** revenue at risk, **diagnoses** it, **chooses** the
+intervention and **executes a bounded recovery workflow** — payment failures, checkout abandonment, overdue
+receivables. *The bar:* measured money recovered across a batch, with compliant escalation, stopping rules and
+an audit trail.
+
+### What the bar already maps to (built and tested)
+| The bar | Where it lives |
+|---|---|
+| Measured money recovered across a batch | Randomised holdout per experiment; recovery counted only when the provider + ledger confirm it (`verifier`, `ledger`); incremental uplift with 95% CI on Overview |
+| Compliant escalation | Compliance Guardian + ToolGateway (scope → schema → policy → approval → execute → audit); maker-checker approvals; RBI recovery hours; contact windows per customer timezone |
+| Stopping rules | STOP / opt-out on every channel; consent before randomisation; contact caps (Contact Arbiter); bank-incident override (no customer contact for technical failures); workflow deadlines |
+| Audit trail | Hash-chained audit log, every tool call and model decision with evidence |
+
+### The seven directions
+| Direction | Today | To build |
+|---|---|---|
+| Payment degradation → root cause → recovery | ◐ Failure Triage (rule table + LLM), M4 bank-incident detection | **Degradation detector**: success rate per bank × method × gateway as a time series, change-point detection (BOCPD / CUSUM), root-cause ranking (contribution analysis), automatic "hold retries until the bank recovers" then a batch re-attempt with measured recovery |
+| Checkout drop-off recovery | ✗ | Razorpay `payment_link` / order events + a JS beacon; abandonment model (M18); recovery sequence with a hosted resume-checkout page; holdout |
+| Failed-subscription recovery | ✅ Conductor (LangGraph), Debit Strategist (M1 timing), RevivalWorkflow, win-back offers with maker-checker | Smart-retry learning per bank/hour (contextual bandit, Thompson sampling, bounded by NPCI retry limits) |
+| B2B receivables chaser | ✗ (invoices land in bronze) | Invoice ledger + ageing buckets; payment-propensity model (M19); polite escalation ladder (WhatsApp → email → voice → human) with dunning letters as approved drafts; partial-payment plans |
+| Mandate retry sequencer | ✅ MandateHealth / MandateRepair workflows, pre-debit notices | Sequencer UI; per-rail retry rules as settings; re-mandate on UPI AutoPay limit breaches |
+| Hinglish voice recovery | ◐ Sarvam voice notes both ways (STT/TTS, 11 languages), OTP redaction | **Live outbound calls**: LiveKit Agents + SIP (Exotel/Plivo), Sarvam streaming STT/TTS, code-mixed Hinglish/Tenglish dialogue, barge-in, consent + call recording disclosure, promise capture on the call |
+| Promise-to-pay tracker | ◐ promises extracted from replies into memory | First-class `promises` table and **PromiseWorkflow**: reminder the day before, check the payment on the date, broken-promise escalation, promise-keeping rate per customer feeding the models |
+
+### Recovery Command Centre (the frontend must *do the work*, not only report)
+- **Recovery queue**: today's at-risk money sorted by expected recoverable rupees (probability × amount), one-click "run plan", batch actions with a dry-run preview of every message and its compliance check.
+- **Campaign builder**: pick a segment → the planner proposes the sequence → simulate on RecurSim → launch with holdout → live uplift chart.
+- **Live inbox with human takeover** (reply through the gateway), **call console** (listen, transcript, take over).
+- **Incident view**: degradation detected → affected debits → held retries → recovered after the bank came back.
+- **Proof report**: per batch, the money recovered vs holdout with CI, every action and its audit hash — exportable PDF for the CFO.
+
+## 17. Roadmap from here (2026-10-04)
+
+| Phase | Delivers | Main technology | Done when |
+|---|---|---|---|
+| **P8.4 Public URL** | Domain + TLS tunnel for webhooks only (dashboard stays private); inbound WhatsApp and Razorpay webhooks live | Cloudflare Tunnel or Caddy, Keycloak redirect config | A real customer reply on WhatsApp shows up in the inbox |
+| **P8.5 Recovery Command Centre** | Recovery queue, batch run with dry-run preview, inbox takeover, proof report (PDF) | Next.js server actions, ToolGateway, WeasyPrint/react-pdf | An operator recovers a batch end to end from the UI, with a proof report |
+| **P9 Multi-agent v2** | LangGraph supervisor over the specialist agents (triage, strategist, conversation, mandate doctor, receivables, degradation); planner proposes, Guardian vetoes, human approves above limits; durable via Temporal; agent evals | LangGraph (supervisor + subgraphs, checkpoints in Postgres), Temporal, MCP tools, A2A for partner agents, Langfuse traces | Agent evals ≥ target on a fixed scenario set; no action bypasses the gateway |
+| **P10 New recovery fronts** | Degradation detector + held retries; PromiseWorkflow; B2B receivables (invoices, ageing, dunning ladder); checkout abandonment | ruptures/BOCPD, LightGBM, contextual bandits (Vowpal Wabbit or own Thompson sampler), Temporal | Each front shows recovered ₹ vs holdout on RecurSim and on a design partner |
+| **P11 Live voice AI** | Outbound/inbound calls in Indian languages, code-mixed speech, barge-in, promise capture on call | LiveKit Agents, SIP trunk (Exotel/Plivo), Sarvam streaming STT/TTS (saaras/bulbul), fast-tier LLM via the gateway | A Hinglish call ends with a recorded promise and a paid link, inside RBI hours |
+| **P12 AI security round 2** | Prompt-injection firewall on every inbound message/document, PII/OTP redaction everywhere, output policy checks, tool-call anomaly detection, red-team suite in CI, model cards | Llama Guard / NeMo Guardrails-style rails behind the LLM gateway, Presidio, OPA policies, garak/promptfoo red-teaming | Red-team suite passes; no PII in logs or prompts |
+| **P13 Models on real data** | Per-tenant M1/M4/M6/M13 + new M18/M19 trained on a design partner's history, champion/challenger live | Feast, MLflow, BentoML, Evidently | Live models beat priors on the partner's own outcomes |
+| **P8.6 → P14 Production readiness** | CI with every gate, Playwright, k6 load, chaos, 72 h soak, Helm/Compose self-host, billing for Nirantar itself, public website + docs | GitHub Actions, Playwright, k6, Helm, Trivy | A new business self-onboards in < 30 minutes and the soak loses zero events |
+
+Honest size: P8.3 closes roughly **55–60 %** of the full product. The engine (ledger, verification, experiments,
+workflows, gateway, models framework, MCP/A2A, WhatsApp) is the hard part and exists; what remains is breadth
+(new recovery fronts, live voice), the operator UI that does the work, a public URL, and production hardening.
+The single biggest step from "working" to "proven" is still a **design partner's real history**.
