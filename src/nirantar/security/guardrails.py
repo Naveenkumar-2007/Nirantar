@@ -66,7 +66,7 @@ _INJECTION: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("hindi", re.compile(r"(पिछले|सारे|सभी)\s*(निर्देश|नियम)\s*(भूल|अनदेखा)|निर्देशों\s*को\s*(भूल|अनदेखा)")),
     ("telugu", re.compile(r"(ముందు|అన్ని)\s*(సూచనలు|నియమాలు)\s*(మర్చిపో|పట్టించుకోవద్దు)")),
 )
-_HIDDEN = re.compile("[​-‏‪-‮⁠-⁤⁦-⁩﻿\U000e0000-\U000e007f]")
+_HIDDEN = re.compile("[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\U000e0000-\U000e007f]")
 
 
 @dataclass(frozen=True)

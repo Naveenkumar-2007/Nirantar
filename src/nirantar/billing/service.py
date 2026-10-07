@@ -42,6 +42,10 @@ def create_tenant(conn: Connection, tenant_id: str, name: str, settings: dict[st
 
 def connect_provider(conn: Connection, tenant_id: str, provider: str, mode: str, secret_ref: str,
                      webhook_secret_ref: str) -> None:
+    from nirantar.core.demo import DemoModeViolation, is_demo
+
+    if is_demo() and provider != "mock":
+        raise DemoModeViolation("the demo only connects the mock payment provider")
     conn.execute(
         text(
             "INSERT INTO core.provider_accounts (tenant_id, provider, mode, secret_ref, webhook_secret_ref) "

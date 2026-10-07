@@ -1,0 +1,29 @@
+# Demo edge on :7860 (Hugging Face terminates TLS in front of the Space).
+{
+	admin off
+	auto_https off
+}
+
+:7860 {
+	encode zstd gzip
+	request_body {
+		max_size 2MB
+	}
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Nirantar-Mode "demo"
+		-Server
+	}
+	@api path /webhooks/* /voice/* /health /ready /version
+	handle @api {
+		reverse_proxy 127.0.0.1:8000
+	}
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
+	log {
+		output stdout
+		format json
+	}
+}

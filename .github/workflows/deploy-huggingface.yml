@@ -1,0 +1,92 @@
+# Deploy the demo to the Hugging Face Space after CI passes on main.
+#   CI green on main → bundle (scripts/space_bundle.sh, no secrets) → upload to the Space → wait for the build →
+#   smoke test /ready and /version over HTTPS → on failure, re-upload the previous good commit (rollback).
+# Needs one repository secret: HF_TOKEN (a fine-grained Hugging Face token with write access to the Space only).
+# The Space holds no Nirantar secrets at all: the demo generates its own per start and refuses real credentials.
+name: deploy-huggingface
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to deploy (default: main)"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-huggingface
+  cancel-in-progress: false
+
+env:
+  SPACE_ID: Naveen-2007/nirantar
+  SPACE_URL: https://naveen-2007-nirantar.hf.space
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: huggingface-demo
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.event.workflow_run.head_sha || 'main' }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install "huggingface_hub[cli]>=0.34"
+
+      - name: previous deployed commit (for rollback)
+        id: prev
+        env: { HF_TOKEN: "${{ secrets.HF_TOKEN }}" }
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          from huggingface_hub import HfApi
+          try:
+              msg = HfApi(token=os.environ["HF_TOKEN"]).list_repo_commits(os.environ["SPACE_ID"], repo_type="space")[0].title
+              sha = msg.split("@", 1)[1].split()[0] if "@" in msg else ""
+          except Exception:
+              sha = ""
+          print(f"sha={sha}")
+          PY
+
+      - name: bundle
+        run: bash scripts/space_bundle.sh "$RUNNER_TEMP/space"
+
+      - name: upload to the Space
+        env: { HF_TOKEN: "${{ secrets.HF_TOKEN }}" }
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          api.create_repo(os.environ["SPACE_ID"], repo_type="space", space_sdk="docker", private=True, exist_ok=True)
+          api.upload_folder(repo_id=os.environ["SPACE_ID"], repo_type="space", folder_path=os.environ["RUNNER_TEMP"] + "/space",
+                            delete_patterns=["*"], commit_message=f"deploy nirantar@{os.environ['GITHUB_SHA'][:7]}")
+          PY
+
+      - name: wait for the build and smoke test
+        id: smoke
+        env: { HF_TOKEN: "${{ secrets.HF_TOKEN }}" }
+        run: python scripts/space_smoke.py --space "$SPACE_ID" --url "$SPACE_URL" --timeout 2400
+
+      - name: rollback to the previous good commit
+        if: failure() && steps.prev.outputs.sha != ''
+        env: { HF_TOKEN: "${{ secrets.HF_TOKEN }}" }
+        run: |
+          git checkout "${{ steps.prev.outputs.sha }}"
+          bash scripts/space_bundle.sh "$RUNNER_TEMP/rollback"
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+          HfApi(token=os.environ["HF_TOKEN"]).upload_folder(
+              repo_id=os.environ["SPACE_ID"], repo_type="space", folder_path=os.environ["RUNNER_TEMP"] + "/rollback",
+              delete_patterns=["*"], commit_message="rollback to nirantar@${{ steps.prev.outputs.sha }}")
+          PY

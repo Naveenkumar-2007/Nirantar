@@ -1,12 +1,16 @@
+# Context filter for the all-in-one demo image (./Dockerfile). Unlike .dockerignore it keeps apps/web.
 .git
+.github
 .venv
 **/__pycache__
+**/node_modules
+apps/web/.next
+apps/web/.env*
 .mypy_cache
 .ruff_cache
 .pytest_cache
 .hypothesis
 .import_linter_cache
-apps
 mlruns
 mlartifacts
 data
@@ -18,6 +22,8 @@ docs/*
 00_SOURCE_OF_TRUTH
 .env
 .env.*
+**/.env
+**/.env.*
 deploy/.env
 *.log
 ml/mlflow.db

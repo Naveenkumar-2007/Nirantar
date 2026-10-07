@@ -134,6 +134,7 @@ async def main() -> None:
     import uvicorn
     from temporalio.client import Client
 
+    from nirantar.core.demo import assert_safe
     from nirantar.events.relay import KafkaProducer, relay_engine
     from nirantar.features.online import OnlineStore
     from nirantar.llm.gateway import LLMGateway
@@ -149,6 +150,7 @@ async def main() -> None:
         ensure_sweep_schedule,
     )
 
+    assert_safe()
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):

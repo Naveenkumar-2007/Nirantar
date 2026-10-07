@@ -1,48 +1,48 @@
 {
   "scenario": "BB-§53 ₹999 subscription, failed debit recovered via WhatsApp",
-  "generated_at": "2026-10-07T17:36:12.604224+00:00",
-  "tenant_id": "ten_01M4BPZH7M6GAZDPMPCJ1403WS",
-  "debit_id": "dbt_01M4BPZHFMXS3G08QKZK0FVRN3",
+  "generated_at": "2026-10-07T18:16:33.322728+00:00",
+  "tenant_id": "ten_01M4BS9A8AX05XFSZKBDA8527B",
+  "debit_id": "dbt_01M4BS9B7015TNB284X3A85KCK",
   "llm_mode": "stub",
   "workflow_result": {
-    "case_id": "cas_01M4BPZHFMXS3G08QKZK0FVRN3",
+    "case_id": "cas_01M4BS9B7015TNB284X3A85KCK",
     "outcome": "recovered",
     "risk": {
       "cash_day_distance": 0.0,
       "cold_start": true,
       "model_version": "prior-v1",
       "p_fail": 0.15,
-      "prediction_id": "prd_01M4BPZRYTPPF2JJVYT66MYRC1",
+      "prediction_id": "prd_01M4BS9MN9QTKA4QZEPXPDC35J",
       "served_by": "prior"
     },
     "trace": [
       {
         "activity": "open_case",
-        "at": "2026-10-07T17:36:11.018000+00:00",
+        "at": "2026-10-07T18:16:31.480000+00:00",
         "result": {
-          "case_id": "cas_01M4BPZHFMXS3G08QKZK0FVRN3"
+          "case_id": "cas_01M4BS9B7015TNB284X3A85KCK"
         },
         "stage": "open"
       },
       {
         "activity": "predict_risk",
-        "at": "2026-10-07T17:36:11.173000+00:00",
+        "at": "2026-10-07T18:16:31.594000+00:00",
         "result": {
           "cash_day_distance": 0.0,
           "cold_start": true,
           "model_version": "prior-v1",
           "p_fail": 0.15,
-          "prediction_id": "prd_01M4BPZRYTPPF2JJVYT66MYRC1",
+          "prediction_id": "prd_01M4BS9MN9QTKA4QZEPXPDC35J",
           "served_by": "prior"
         },
         "stage": "predict"
       },
       {
         "activity": "pre_debit",
-        "at": "2026-10-07T17:36:11.236000+00:00",
+        "at": "2026-10-07T18:16:31.664000+00:00",
         "result": {
           "notice": {
-            "action_id": "act_01M4BPZS03FBM2YXRXQ0AZ4WDS",
+            "action_id": "act_01M4BS9MPV05930TK7A7QF7TJ3",
             "provider_ref": "wamid.mock000001",
             "status": "executed",
             "template_ref": "sms.predebit_notice@en:v0"
@@ -60,7 +60,7 @@
       },
       {
         "activity": "mark_attempting",
-        "at": "2026-10-10T17:36:03.568000+00:00",
+        "at": "2026-10-10T18:16:21.974000+00:00",
         "result": {
           "status": "attempting"
         },
@@ -68,7 +68,7 @@
       },
       {
         "activity": "collect",
-        "at": "2026-10-10T17:36:03.580000+00:00",
+        "at": "2026-10-10T18:16:21.997000+00:00",
         "result": {
           "method": "provider_subscription",
           "status": "provider_charges"
@@ -77,7 +77,7 @@
       },
       {
         "activity": "handle_failure",
-        "at": "2026-10-10T17:41:11.425000+00:00",
+        "at": "2026-10-10T18:21:31.889000+00:00",
         "result": {
           "actions": [],
           "chosen_arm": null,
@@ -94,7 +94,7 @@
               "step": "triage"
             },
             {
-              "action_id": "act_01M4BPZS910HP5VXAMTT6033M2",
+              "action_id": "act_01M4BS9N0ZFWEMZ63RZDF32QSW",
               "language": "te",
               "step": "context"
             },
@@ -115,7 +115,7 @@
             },
             {
               "arm": "treatment",
-              "experiment_id": "exp_01M4BPZHFMTCXBNKQTMWE3F5F6",
+              "experiment_id": "exp_01M4BS9B6T5HRFJ3RGM2APE0PE",
               "step": "assignment"
             },
             {
@@ -152,17 +152,17 @@
       },
       {
         "activity": "handle_failure",
-        "at": "2026-10-11T03:30:00.004000+00:00",
+        "at": "2026-10-11T03:30:00.008000+00:00",
         "result": {
           "actions": [
             {
-              "action_id": "act_01M4BPZSPHDPHS0M30V46AQ8HN",
+              "action_id": "act_01M4BS9NFKXNSV93R7VRVNQSRC",
               "provider_ref": "plink_mock00000004",
               "status": "executed",
               "tool": "gateway.create_payment_link"
             },
             {
-              "action_id": "act_01M4BPZSSQHBP0F4Q9S840PJ2K",
+              "action_id": "act_01M4BS9NJ6DWK0P5K5CYAE8X3Q",
               "denied_by": [],
               "draft_source": "llm",
               "language": "te",
@@ -186,7 +186,7 @@
               "step": "triage"
             },
             {
-              "action_id": "act_01M4BPZSJ01Q1Y7TA8EGVQVDAW",
+              "action_id": "act_01M4BS9N9X2QWVZVZ9348MZC34",
               "language": "te",
               "step": "context"
             },
@@ -205,7 +205,7 @@
             },
             {
               "arm": "treatment",
-              "experiment_id": "exp_01M4BPZHFMTCXBNKQTMWE3F5F6",
+              "experiment_id": "exp_01M4BS9B6T5HRFJ3RGM2APE0PE",
               "step": "assignment"
             },
             {
@@ -223,13 +223,13 @@
             {
               "results": [
                 {
-                  "action_id": "act_01M4BPZSPHDPHS0M30V46AQ8HN",
+                  "action_id": "act_01M4BS9NFKXNSV93R7VRVNQSRC",
                   "provider_ref": "plink_mock00000004",
                   "status": "executed",
                   "tool": "gateway.create_payment_link"
                 },
                 {
-                  "action_id": "act_01M4BPZSSQHBP0F4Q9S840PJ2K",
+                  "action_id": "act_01M4BS9NJ6DWK0P5K5CYAE8X3Q",
                   "denied_by": [],
                   "draft_source": "llm",
                   "language": "te",
@@ -244,7 +244,7 @@
             {
               "arm": "whatsapp",
               "exposure": {
-                "exposure_id": "xpo_01M4BPZSVKPR9BJ0CA89TRFPZH"
+                "exposure_id": "xpo_01M4BS9NNPV6PBNYT8P6J3VJH3"
               },
               "step": "exposure"
             }
@@ -261,21 +261,32 @@
       },
       {
         "activity": "record_reply",
-        "at": "2026-10-11T03:41:11.729000+00:00",
+        "at": "2026-10-11T04:21:32.224000+00:00",
         "result": {
           "ack_error": null,
           "acknowledged": "executed",
           "intent": "promise_to_pay",
-          "memory_id": "mem_01M4BPZSXG7FRHBHBVR1BG7798",
-          "promise_id": "prm_01M4BPZSY52KNJNRA4GJBSVK1F",
+          "memory_id": "mem_01M4BS9NRD2YD7RXP12X3KM5S2",
+          "promise_id": "prm_01M4BS9NRRRRFDTG0EA25KXH7S",
           "promised_date": "2026-10-11",
           "status": "executed"
         },
         "stage": "awaiting_recovery"
       },
       {
+        "activity": "promise_remind",
+        "at": "2026-10-11T04:21:32.335000+00:00",
+        "result": {
+          "error": null,
+          "sent": true,
+          "status": "executed",
+          "url": "https://mock.pay/dbt_01M4BS9B7015TNB284X3A85KCK.1"
+        },
+        "stage": "promised"
+      },
+      {
         "activity": "promise_resolve",
-        "at": "2026-10-11T03:41:11.993000+00:00",
+        "at": "2026-10-11T04:21:32.527000+00:00",
         "result": {
           "kept": true,
           "resolved": 1
@@ -284,7 +295,7 @@
       },
       {
         "activity": "verify_and_close",
-        "at": "2026-10-11T03:41:12.009000+00:00",
+        "at": "2026-10-11T04:21:32.559000+00:00",
         "result": {
           "evidence": {
             "evidence_hash": "7f68ef8b9acec0260031c497f408711589f15f69056eadf342f424e47e76efa2",
@@ -292,10 +303,10 @@
             "reason": "captured_and_matched",
             "verified": true
           },
-          "experiment_outcome_id": "out_01M4BPZT75QCNTMTT2JKZA2SBB",
+          "experiment_outcome_id": "out_01M4BS9P4FXB16T69BM65GTPY5",
           "label_ids": [
-            "lbl_01M4BPZT749Z7HXXPPMZ329VE8",
-            "lbl_01M4BPZT75AJH9ZQXP3SB02126"
+            "lbl_01M4BS9P4CZ969SPBKKRPAT5S8",
+            "lbl_01M4BS9P4E78K972FTCJN6A00E"
           ],
           "live_eval": {
             "brier": 0.7224999999999999,
@@ -308,10 +319,10 @@
             "n_labelled": 1,
             "note": "too few labels for reliable metrics",
             "observed_rate": 1.0,
-            "tenant_id": "ten_01M4BPZH7M6GAZDPMPCJ1403WS"
+            "tenant_id": "ten_01M4BS9A8AX05XFSZKBDA8527B"
           },
           "outcome": "recovered",
-          "outcome_event_id": "evt_01M4BPZT75EKR150AJ4Y6Z6MXC",
+          "outcome_event_id": "evt_01M4BS9P4J6D3K32H4G3Q7FEHE",
           "receipt": null,
           "verified": true
         },
@@ -326,7 +337,7 @@
       "clearing_mock": "INR 999.00",
       "trial_balance_ok": true
     },
-    "audit_records_verified": 32,
+    "audit_records_verified": 34,
     "outbox_events": {
       "experiment.exposure": 1,
       "outcome.recovered": 1,
@@ -354,9 +365,9 @@
       },
       {
         "agent_id": "conductor",
-        "tool_name": "experiment.assign_treatment",
+        "tool_name": "policy.check_action",
         "status": "executed",
-        "policy_decision": null
+        "policy_decision": "DENY"
       },
       {
         "agent_id": "conductor",
@@ -369,18 +380,6 @@
         "tool_name": "policy.check_action",
         "status": "executed",
         "policy_decision": "DENY"
-      },
-      {
-        "agent_id": "conductor",
-        "tool_name": "policy.check_action",
-        "status": "executed",
-        "policy_decision": "DENY"
-      },
-      {
-        "agent_id": "conductor",
-        "tool_name": "experiment.log_exposure",
-        "status": "executed",
-        "policy_decision": null
       },
       {
         "agent_id": "conductor",
@@ -396,19 +395,13 @@
       },
       {
         "agent_id": "conversation_agent",
-        "tool_name": "content.get_template",
-        "status": "executed",
-        "policy_decision": null
-      },
-      {
-        "agent_id": "conversation_agent",
         "tool_name": "comms.send_whatsapp",
         "status": "executed",
         "policy_decision": "ALLOW"
       },
       {
         "agent_id": "conductor",
-        "tool_name": "customer.get_profile",
+        "tool_name": "experiment.log_exposure",
         "status": "executed",
         "policy_decision": null
       },
@@ -426,13 +419,37 @@
       },
       {
         "agent_id": "conductor",
-        "tool_name": "case.record_reply",
+        "tool_name": "experiment.assign_treatment",
+        "status": "executed",
+        "policy_decision": null
+      },
+      {
+        "agent_id": "conversation_agent",
+        "tool_name": "content.get_template",
+        "status": "executed",
+        "policy_decision": null
+      },
+      {
+        "agent_id": "conductor",
+        "tool_name": "customer.get_profile",
         "status": "executed",
         "policy_decision": null
       },
       {
         "agent_id": "conductor",
         "tool_name": "comms.acknowledge_reply",
+        "status": "executed",
+        "policy_decision": "ALLOW"
+      },
+      {
+        "agent_id": "conductor",
+        "tool_name": "case.record_reply",
+        "status": "executed",
+        "policy_decision": null
+      },
+      {
+        "agent_id": "billing_agent",
+        "tool_name": "billing.send_payment_request",
         "status": "executed",
         "policy_decision": "ALLOW"
       },
@@ -471,11 +488,15 @@
       },
       {
         "channel": "whatsapp",
-        "text": "నమస్తే Priya, Chai Club కోసం ₹999.00 చెల్లింపు పెండింగ్‌లో ఉంది. ఇక్కడ చెల్లించండి: https://mock.pay/dbt_01M4BPZHFMXS3G08QKZK0FVRN3.1"
+        "text": "నమస్తే Priya, Chai Club కోసం ₹999.00 చెల్లింపు పెండింగ్‌లో ఉంది. ఇక్కడ చెల్లించండి: https://mock.pay/dbt_01M4BS9B7015TNB284X3A85KCK.1"
       },
       {
         "channel": "whatsapp",
         "text": "ధన్యవాదాలు Priya, మీరు 11 Oct 2026 లోపు చెల్లిస్తారని మేము నమోదు చేసుకున్నాము."
+      },
+      {
+        "channel": "whatsapp",
+        "text": "నమస్తే Priya, మీరు చెప్పినట్లుగా, ఈరోజు మీ subscription ₹999.00 చెల్లింపు రోజు. ఇక్కడ సురక్షితంగా చెల్లించండి: https://mock.pay/dbt_01M4BS9B7015TNB284X3A85KCK.1"
       }
     ]
   }

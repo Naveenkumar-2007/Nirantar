@@ -9,6 +9,9 @@ RUN uv sync --frozen --no-dev --all-extras --no-install-project
 COPY src ./src
 COPY alembic.ini ./
 COPY ml ./ml
+# read at runtime: the compliance policy catalogue (policy engine, RAG) and the latest eval results (API)
+COPY docs/compliance ./docs/compliance
+COPY evals/results ./evals/results
 RUN uv sync --frozen --no-dev --all-extras
 
 FROM python:3.12-slim

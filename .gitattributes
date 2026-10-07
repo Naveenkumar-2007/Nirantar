@@ -4,3 +4,7 @@
 *.jpg binary
 *.pdf binary
 *.db binary
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.Caddyfile text eol=lf
+deploy/space/Caddyfile text eol=lf

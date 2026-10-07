@@ -33,6 +33,7 @@ def resolve_secret(ref: str | None, *, tenant_id: str | None = None, engine: Any
         if not value:
             raise SecretNotFound(f"environment secret {name} is not set")
         return value
-    if scheme == "literal" and os.environ.get("NIRANTAR_ENV", "local") in ("local", "test"):
-        return name  # test fixtures only; rejected outside local/test
+    if scheme == "literal" and (os.environ.get("NIRANTAR_ENV", "local") in ("local", "test")
+                                or os.environ.get("NIRANTAR_DEMO") == "1"):
+        return name  # test fixtures and the mock-only demo; rejected anywhere else
     raise SecretNotFound(f"unsupported secret scheme {scheme!r}")

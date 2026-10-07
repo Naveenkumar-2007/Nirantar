@@ -11,7 +11,7 @@ from sqlalchemy import Engine, create_engine, text
 def _load_dotenv() -> None:
     """Load repo-root .env without overriding real environment variables."""
     env_file = Path(__file__).resolve().parent.parent / ".env"
-    if not env_file.exists():
+    if not env_file.exists() or os.environ.get("NIRANTAR_NO_DOTENV") == "1":   # CI parity: no local secrets
         return
     for line in env_file.read_text(encoding="utf-8").splitlines():
         line = line.strip()

@@ -94,6 +94,10 @@ _DEFAULT: list[ExotelClient | None] = []
 
 def default_client() -> ExotelClient | None:
     """The deployment's Exotel account (env), built once; None when voice is not configured."""
+    from nirantar.core.demo import is_demo
+
+    if is_demo():                                   # the demo never places a call
+        return None
     if not _DEFAULT:
         _DEFAULT.append(ExotelClient.from_env())
     return _DEFAULT[0]

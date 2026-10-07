@@ -1,0 +1,154 @@
+# Nirantar CI: every pull request and every push to main.
+# Static checks → the full test suite against real Postgres/Temporal/Redpanda/object store → security scans →
+# both production images built and scanned. No repository secrets are needed: tests use mock providers only, and
+# conftest strips any WhatsApp/Exotel variables so CI can never message or call anyone.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  UV_VERSION: "0.8.17"
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+
+jobs:
+  static:
+    name: lint · types · layering
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: { version: "${{ env.UV_VERSION }}", enable-cache: true }
+      - run: uv python install ${{ env.PYTHON_VERSION }}
+      - run: uv sync --frozen --all-extras
+      - name: ruff
+        run: uv run ruff check src tests
+      - name: mypy (strict)
+        run: uv run mypy src
+      - name: import contracts (agents never touch providers or the database)
+        run: uv run lint-imports
+
+  test:
+    name: test suite (real services)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      NIRANTAR_REQUIRE_SERVICES: "1"     # a missing service FAILS the run instead of skipping tests
+      NIRANTAR_NO_DOTENV: "1"
+      NIRANTAR_ENV: ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: { version: "${{ env.UV_VERSION }}", enable-cache: true }
+      - run: uv python install ${{ env.PYTHON_VERSION }}
+      - run: uv sync --frozen --all-extras
+      - name: start services
+        run: docker compose up -d --wait postgres redis redpanda objectstore temporal
+      - name: wait for Temporal
+        run: |
+          for i in $(seq 1 60); do
+            docker compose exec -T temporal tctl --address temporal:7233 cluster health 2>/dev/null | grep -q SERVING && exit 0
+            sleep 3
+          done
+          docker compose logs temporal | tail -50; exit 1
+      - name: migrate a fresh database
+        run: uv run alembic upgrade head
+      - name: migration round trip (downgrade one step, upgrade again)
+        run: uv run alembic downgrade -1 && uv run alembic upgrade head
+      - name: tests
+        run: uv run pytest -p no:cacheprovider -W ignore --tb=short -m "not soak and not sandbox" --junitxml=reports/junit.xml
+      - name: workflow replay (old histories must replay on new code)
+        run: uv run pytest -p no:cacheprovider -W ignore tests/replay
+      - if: failure()
+        run: docker compose logs --tail=200
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: junit, path: reports/junit.xml, if-no-files-found: ignore }
+
+  web:
+    name: web · lint · types · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults: { run: { working-directory: apps/web } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm, cache-dependency-path: apps/web/package-lock.json }
+      - run: npm ci --ignore-scripts
+      - run: npx tsc --noEmit
+      - run: npm run lint
+      - run: npm run build
+        env: { NEXT_TELEMETRY_DISABLED: "1" }
+
+  security:
+    name: security scans
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }         # secret scanning covers the whole history
+      - name: secret scan (gitleaks, full history)
+        uses: gitleaks/gitleaks-action@v2
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+      - uses: astral-sh/setup-uv@v6
+        with: { version: "${{ env.UV_VERSION }}" }
+      - name: SAST (bandit, medium+ severity and confidence)
+        # Six low-confidence B608 hits are reviewed false positives (fixed SQL fragments, bound values) —
+        # see docs/security/README.md.
+        run: uvx bandit -q -r src -ll -ii
+      - name: Python dependency audit
+        # PYSEC-2026-3740: nltk via evidently (drift reports only, never on a request path); no fixed release yet.
+        run: |
+          uv export --frozen --all-extras --no-dev --no-hashes --no-emit-project > /tmp/requirements.txt
+          uvx pip-audit -r /tmp/requirements.txt --progress-spinner off --ignore-vuln PYSEC-2026-3740
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}" }
+      - name: npm audit (production dependencies, high+)
+        working-directory: apps/web
+        run: npm audit --omit=dev --audit-level=high
+
+  images:
+    name: build + scan images
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    needs: [static, web]
+    strategy:
+      matrix:
+        include:
+          - { name: python, context: ., file: deploy/Dockerfile.python }
+          - { name: web, context: apps/web, file: apps/web/Dockerfile }
+          - { name: space, context: ., file: Dockerfile }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          tags: nirantar-${{ matrix.name }}:ci
+          load: true
+          push: false
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+      - name: container scan (trivy, fixable HIGH/CRITICAL fail the build)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: nirantar-${{ matrix.name }}:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          vuln-type: os,library
+      - name: runs as non-root
+        run: test "$(docker image inspect -f '{{.Config.User}}' nirantar-${{ matrix.name }}:ci)" != ""

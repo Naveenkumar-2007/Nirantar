@@ -60,11 +60,12 @@ function initials(name?: string | null): string {
   return (name ?? "?").split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join("") || "?";
 }
 
-export function AppSidebar({ user, businesses, current, switchAction }: {
+export function AppSidebar({ user, businesses, current, switchAction, demo = false }: {
   user: { name?: string; email?: string } | null;
   businesses: Business[];
   current?: Business;
   switchAction: (formData: FormData) => Promise<void>;
+  demo?: boolean;
 }) {
   const pathname = usePathname();
   const { theme, setTheme } = useTheme();
@@ -145,8 +146,8 @@ export function AppSidebar({ user, businesses, current, switchAction }: {
                     </AvatarFallback>
                   </Avatar>
                   <div className="grid flex-1 text-left leading-tight">
-                    <span className="truncate text-sm font-medium">{user?.name ?? "Local mode"}</span>
-                    <span className="truncate text-xs text-muted-foreground">{user?.email ?? "No sign-in configured"}</span>
+                    <span className="truncate text-sm font-medium">{user?.name ?? (demo ? "Demo business" : "Local mode")}</span>
+                    <span className="truncate text-xs text-muted-foreground">{user?.email ?? (demo ? "Synthetic data · resets on restart" : "No sign-in configured")}</span>
                   </div>
                   <ChevronsUpDown className="ml-auto size-4 text-muted-foreground" />
                 </SidebarMenuButton>

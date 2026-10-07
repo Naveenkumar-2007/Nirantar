@@ -21,9 +21,10 @@ def default_comms(engine: Engine) -> Any:
     """The deployment's real channel: WhatsApp Cloud API when configured (with Sarvam for spoken replies), otherwise
     UnconnectedSink (every send fails loudly). The mock only when NIRANTAR_COMMS=mock outside production."""
     from nirantar.comms.sink import MockCommsSink, UnconnectedSink
+    from nirantar.core.demo import is_demo
 
     local = os.environ.get("NIRANTAR_ENV", "local") != "production"
-    if local and os.environ.get("NIRANTAR_COMMS") == "mock":
+    if is_demo() or (local and os.environ.get("NIRANTAR_COMMS") == "mock"):
         return MockCommsSink()
     from nirantar.channels.sink import ChannelSink
     from nirantar.channels.whatsapp import WhatsAppCloud

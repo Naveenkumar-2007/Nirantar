@@ -204,7 +204,16 @@ def approval_executor(s: Services) -> Any:
     return ex
 
 
+def _migration_head() -> str:
+    """The newest migration shipped with this build (file names start with the revision id)."""
+    versions = Path(__file__).resolve().parent.parent / "db" / "migrations" / "versions"
+    return max(p.name.split("_", 1)[0] for p in versions.glob("[0-9]*_*.py"))
+
+
 def create_app(svc: Services | None = None) -> FastAPI:
+    from nirantar.core.demo import assert_safe
+
+    assert_safe()                                   # a demo process with real credentials refuses to start
     app = FastAPI(title="Nirantar API", version="0.1.0", default_response_class=JSON)
     app.state.services = svc or default_services()
     s_root: Services = app.state.services
@@ -247,6 +256,25 @@ def create_app(svc: Services | None = None) -> FastAPI:
         except Exception as exc:  # health reports, never raises
             db = f"error: {type(exc).__name__}"
         return {"status": "ok" if db == "ok" else "degraded", "db": db}
+
+    @app.get("/ready")
+    def ready(s: Services = Depends(services)) -> JSONResponse:
+        """Readiness: 200 only when the database answers AND is migrated to the revision this build expects."""
+        expected = _migration_head()
+        try:
+            with s.engine.connect() as c:
+                at = c.execute(text("SELECT version_num FROM alembic_version")).scalar_one_or_none()
+        except Exception as exc:  # readiness reports, never raises
+            return JSONResponse({"ready": False, "db": f"error: {type(exc).__name__}"}, status_code=503)
+        ok = at == expected
+        return JSONResponse({"ready": ok, "db": "ok", "migration": at, "expected_migration": expected},
+                            status_code=200 if ok else 503)
+
+    @app.get("/version")
+    def version() -> dict[str, Any]:
+        return {"service": "nirantar-api", "build": os.environ.get("NIRANTAR_BUILD_ID", "dev"),
+                "environment": os.environ.get("NIRANTAR_ENV", "local"), "migration": _migration_head(),
+                "demo": os.environ.get("NIRANTAR_DEMO") == "1"}
 
     # ------------------------------------------------------------- merchant API
     @app.get("/v1/overview")
