@@ -31,7 +31,7 @@ from nirantar.mcp.tools import AGENT_SCOPES, TOOLS
 from nirantar.payments.providers.mock import MockProvider
 from nirantar.settings import learning, runtime, templates
 from nirantar.settings import service as settings
-from nirantar.settings.schema import platform_defaults
+from nirantar.settings.schema import CATEGORIES, platform_defaults
 
 pytestmark = pytest.mark.integration
 NOW = datetime(2026, 10, 5, 5, 0, tzinfo=UTC)          # 10:30 IST
@@ -231,7 +231,7 @@ def test_effects_are_learned_from_real_db_outcomes(app_engine: Engine) -> None:
         eff = out["effects"]["value"]["effects"]["INSUFFICIENT_FUNDS"]["whatsapp"]
         assert 0.06 < eff < 0.4                                         # moved from the 0.06 prior towards 0.25
         src = runtime.load(c, t).sources["effects"]
-        assert src == f"learned:v{out['effects']['version']} (1/6 categories)"
+        assert src == f"learned:v{out['effects']['version']} (1/{len(CATEGORIES)} categories)"
 
 
 def test_no_op_and_duplicate_proposals_are_refused(app_engine: Engine, tenant: dict[str, Any]) -> None:

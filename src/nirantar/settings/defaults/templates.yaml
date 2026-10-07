@@ -9,6 +9,39 @@ specs:
     channel: whatsapp
     required: [amount, link]
     allowed: [name, amount, plan, link]
+  whatsapp.invoice_statement:    # B2B: all of a customer's open invoices in ONE message, one "pay all" link
+    channel: whatsapp
+    required: [count, amount, list, link]
+    allowed: [name, business, count, amount, list, link]
+  whatsapp.invoice_reminder:     # B2B invoice: before / on the due date
+    channel: whatsapp
+    required: [number, amount, date, link]
+    allowed: [name, business, number, amount, date, link]
+  whatsapp.invoice_overdue:      # B2B invoice: polite overdue follow-up
+    channel: whatsapp
+    required: [number, amount, date, link]
+    allowed: [name, business, number, amount, date, link]
+  whatsapp.invoice_final:        # B2B invoice: final notice — always approved by a person first
+    channel: whatsapp
+    required: [number, amount, deadline, link]
+    allowed: [name, business, number, amount, deadline, link]
+  whatsapp.bank_issue_retry:     # after a bank/UPI outage: it was not the customer's fault; a fresh link
+    channel: whatsapp
+    required: [amount, link]
+    allowed: [name, amount, plan, link]
+  whatsapp.promise_reminder:     # the day the customer promised to pay: their own words, a link, no pressure
+    channel: whatsapp
+    required: [amount, link]
+    allowed: [name, amount, plan, link]
+  whatsapp.payment_receipt:      # post-debit notification (RBI): confirmation after a verified payment
+    channel: whatsapp
+    mandatory: true
+    required: [amount, date, ref]
+    allowed: [name, amount, plan, date, ref]
+  whatsapp.payment_due:          # pay-by-link collection on the due date (a bill the customer signed up for)
+    channel: whatsapp
+    required: [amount, date, link]
+    allowed: [name, amount, plan, date, link]
   sms.predebit_notice:
     channel: sms
     mandatory: true
@@ -64,6 +97,38 @@ templates:
     en: "Hi {name}, your {amount} payment for {plan} didn't go through. You can pay securely here: {link}"
     hi: "नमस्ते {name}, {plan} के लिए आपका {amount} का भुगतान नहीं हो पाया। आप यहाँ सुरक्षित भुगतान कर सकते हैं: {link}"
     te: "నమస్తే {name}, {plan} కోసం మీ {amount} చెల్లింపు పూర్తి కాలేదు. ఇక్కడ సురక్షితంగా చెల్లించవచ్చు: {link}"
+  whatsapp.invoice_statement:
+    en: "Hello {name}, you have {count} open invoices from {business} totalling {amount}: {list}. You can pay all of them securely here: {link}"
+    hi: "नमस्ते {name}, {business} के आपके {count} इनवॉइस बकाया हैं, कुल {amount}: {list}। आप सभी का भुगतान यहाँ सुरक्षित रूप से कर सकते हैं: {link}"
+    te: "నమస్తే {name}, {business} నుండి మీకు {count} ఇన్వాయిస్‌లు బాకీ ఉన్నాయి, మొత్తం {amount}: {list}. అన్నింటినీ ఇక్కడ సురక్షితంగా చెల్లించవచ్చు: {link}"
+  whatsapp.invoice_reminder:
+    en: "Hello {name}, a reminder from {business}: invoice {number} for {amount} is due on {date}. You can pay securely here: {link}"
+    hi: "नमस्ते {name}, {business} की ओर से सूचना: इनवॉइस {number} ({amount}) की देय तिथि {date} है। आप यहाँ सुरक्षित भुगतान कर सकते हैं: {link}"
+    te: "నమస్తే {name}, {business} నుండి గుర్తు: ఇన్వాయిస్ {number} ({amount}) చెల్లించాల్సిన తేదీ {date}. ఇక్కడ సురక్షితంగా చెల్లించవచ్చు: {link}"
+  whatsapp.invoice_overdue:
+    en: "Hello {name}, invoice {number} from {business} for {amount} was due on {date} and is still open. If you have already paid, please ignore this message. To pay: {link}"
+    hi: "नमस्ते {name}, {business} का इनवॉइस {number} ({amount}) {date} को देय था और अभी बकाया है। यदि आप भुगतान कर चुके हैं तो कृपया इस संदेश को अनदेखा करें। भुगतान के लिए: {link}"
+    te: "నమస్తే {name}, {business} ఇన్వాయిస్ {number} ({amount}) {date} న చెల్లించాల్సి ఉంది, ఇంకా బాకీ ఉంది. మీరు ఇప్పటికే చెల్లించి ఉంటే ఈ సందేశాన్ని పట్టించుకోకండి. చెల్లించడానికి: {link}"
+  whatsapp.invoice_final:
+    en: "Hello {name}, invoice {number} from {business} for {amount} remains unpaid. Please pay by {deadline}, or reply to this message so we can find a way together: {link}"
+    hi: "नमस्ते {name}, {business} का इनवॉइस {number} ({amount}) अभी भी बकाया है। कृपया {deadline} तक भुगतान करें, या इस संदेश का उत्तर दें ताकि हम मिलकर कोई रास्ता निकाल सकें: {link}"
+    te: "నమస్తే {name}, {business} ఇన్వాయిస్ {number} ({amount}) ఇంకా చెల్లించలేదు. దయచేసి {deadline} లోపు చెల్లించండి, లేదా మనం కలిసి మార్గం కనుగొనేందుకు ఈ సందేశానికి సమాధానం ఇవ్వండి: {link}"
+  whatsapp.bank_issue_retry:
+    en: "Hi {name}, your {plan} payment of {amount} didn't go through because of a temporary problem at the bank. It's working again now — you can pay securely here: {link}"
+    hi: "नमस्ते {name}, बैंक में अस्थायी समस्या के कारण आपके {plan} का {amount} का भुगतान नहीं हो पाया। अब यह ठीक है — आप यहाँ सुरक्षित भुगतान कर सकते हैं: {link}"
+    te: "నమస్తే {name}, బ్యాంకులో తాత్కాలిక సమస్య వల్ల మీ {plan} {amount} చెల్లింపు పూర్తి కాలేదు. ఇప్పుడు సరిగా పనిచేస్తోంది — ఇక్కడ సురక్షితంగా చెల్లించవచ్చు: {link}"
+  whatsapp.promise_reminder:
+    en: "Hi {name}, as you mentioned, today is the day for your {plan} payment of {amount}. Pay securely here: {link}"
+    hi: "नमस्ते {name}, जैसा आपने बताया था, आज आपके {plan} के {amount} के भुगतान का दिन है। यहाँ सुरक्षित भुगतान करें: {link}"
+    te: "నమస్తే {name}, మీరు చెప్పినట్లుగా, ఈరోజు మీ {plan} {amount} చెల్లింపు రోజు. ఇక్కడ సురక్షితంగా చెల్లించండి: {link}"
+  whatsapp.payment_receipt:
+    en: "Thank you {name}! We received your {amount} payment for {plan} on {date}. Reference: {ref}."
+    hi: "धन्यवाद {name}! हमें {plan} के लिए आपका {amount} का भुगतान {date} को मिल गया है। संदर्भ: {ref}।"
+    te: "ధన్యవాదాలు {name}! {plan} కోసం మీ {amount} చెల్లింపు {date} న అందింది. రిఫరెన్స్: {ref}."
+  whatsapp.payment_due:
+    en: "Hi {name}, your {plan} payment of {amount} is due on {date}. Pay securely here: {link}"
+    hi: "नमस्ते {name}, आपके {plan} का {amount} का भुगतान {date} को देय है। यहाँ सुरक्षित भुगतान करें: {link}"
+    te: "నమస్తే {name}, మీ {plan} చెల్లింపు {amount} {date} న చెల్లించాలి. ఇక్కడ సురక్షితంగా చెల్లించండి: {link}"
   whatsapp.winback:
     en: "Hi {name}, we'd love to have you back on {plan}. {offer} Restart here: {link} (reply STOP to opt out)"
     hi: "नमस्ते {name}, हम चाहेंगे कि आप {plan} पर वापस आएँ। {offer} यहाँ फिर से शुरू करें: {link} (बंद करने के लिए STOP लिखें)"

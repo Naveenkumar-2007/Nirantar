@@ -73,10 +73,9 @@ def build(conn: Connection, now: datetime, *, min_risk: float = 0.3) -> dict[str
                 "FROM ops.actions x LEFT JOIN ops.approvals ap ON ap.tenant_id=x.tenant_id AND "
                 "ap.approval_id=x.approval_id WHERE x.case_id = ANY(:c) ORDER BY x.created_at"), {"c": case_ids}):
             acts[a.case_id].append(a)
-    promises = {r.debit_id: r.promised_date for r in conn.execute(text(
-        "SELECT DISTINCT ON (value->>'debit_id') value->>'debit_id' AS debit_id, value->>'promised_date' AS "
-        "promised_date FROM ai.memory WHERE key='customer_reply' AND value->>'intent'='promise_to_pay' AND "
-        "superseded_by IS NULL ORDER BY value->>'debit_id', created_at DESC"))}
+    promises = {r.debit_id: r.promised_date.isoformat() for r in conn.execute(text(
+        "SELECT debit_id, promised_date FROM ops.promises WHERE status IN ('open','broken') AND promised_date IS "
+        "NOT NULL ORDER BY created_at"))}                                  # the latest promise per debit wins
     for r in failed:
         code = r.last_error_code or "UNKNOWN"
         p = by_code.get(code, overall)

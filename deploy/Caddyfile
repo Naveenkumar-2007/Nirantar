@@ -1,0 +1,49 @@
+# Edge: automatic HTTPS (Let's Encrypt) for the app and sign-in hosts. Only these paths reach the API:
+#   /webhooks/*  Razorpay, WhatsApp and Exotel deliveries (verified / scoped by the API)
+#   /voice/*     Exotel Voicebot audio stream (WebSocket, signed call token required)
+# Everything else is the web app (dashboard behind sign-in; /pay/* is the customer pay page).
+{
+	email {$ACME_EMAIL}
+}
+
+(security) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}
+
+{$NIRANTAR_DOMAIN} {
+	import security
+	encode zstd gzip
+	request_body {
+		max_size 2MB
+	}
+	handle /webhooks/* {
+		reverse_proxy api:8000
+	}
+	# Exotel Voicebot audio stream (WebSocket); the API refuses any stream without a valid signed call token
+	handle /voice/* {
+		reverse_proxy api:8000
+	}
+	handle /health {
+		reverse_proxy api:8000
+	}
+	handle {
+		reverse_proxy web:3000
+	}
+	log {
+		output stdout
+		format json
+	}
+}
+
+auth.{$NIRANTAR_DOMAIN} {
+	import security
+	# the admin console is not exposed on the internet; administer Keycloak over an SSH tunnel
+	@admin path /admin* /realms/master*
+	respond @admin 404
+	reverse_proxy keycloak:8080
+}

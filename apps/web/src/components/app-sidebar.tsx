@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
   Activity, BadgeCheck, Blocks, Bot, Building2, ChevronsUpDown, ClipboardCheck, Contact, Database, FlaskConical, Gauge,
-  HandCoins, HeartHandshake, LifeBuoy, LogOut, MessagesSquare, Monitor, Moon, PlugZap, Repeat, Rocket, ScrollText, ShieldCheck, Sparkles,
+  HandCoins, HeartHandshake, Layers, LifeBuoy, LogOut, MessagesSquare, Monitor, Moon, PlugZap, ReceiptIndianRupee, Repeat, Rocket, Siren, ScrollText, ShieldCheck, Sparkles,
   Sun, Users, Wallet, Workflow,
 } from "lucide-react";
 import {
@@ -26,6 +26,7 @@ const NAV: { label: string; items: NavItem[] }[] = [
     { href: "/", label: "Overview", icon: Gauge },
     { href: "/recovery", label: "Recovery", icon: HandCoins },
     { href: "/customers", label: "Customers", icon: Contact },
+    { href: "/plans", label: "Plans", icon: Layers },
     { href: "/conversations", label: "Conversations", icon: MessagesSquare },
     { href: "/debits", label: "Debits", icon: Wallet },
     { href: "/approvals", label: "Approvals", icon: ClipboardCheck },
@@ -33,11 +34,13 @@ const NAV: { label: string; items: NavItem[] }[] = [
   ] },
   { label: "Grow", items: [
     { href: "/retention", label: "Retention & win-back", icon: HeartHandshake },
+    { href: "/receivables", label: "Receivables", icon: ReceiptIndianRupee },
     { href: "/experiments", label: "Experiments", icon: FlaskConical },
     { href: "/automations", label: "Automations", icon: Workflow },
   ] },
   { label: "Intelligence", items: [
     { href: "/models", label: "Your models", icon: Sparkles },
+    { href: "/payment-health", label: "Payment health", icon: Siren },
     { href: "/data", label: "Data & readiness", icon: Database },
     { href: "/assistant", label: "Policy assistant", icon: LifeBuoy },
   ] },

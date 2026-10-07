@@ -19,7 +19,9 @@ from typing import Any
 from nirantar.core.money import Money
 from nirantar.payments.domain import (
     Capability,
+    CheckoutOrder,
     LinkRequest,
+    LinkStatus,
     NormalizedWebhook,
     PaymentLink,
     PaymentStatus,
@@ -58,6 +60,7 @@ class MockProvider:
             Capability.REFUND_IDEMPOTENCY,
             Capability.REQUEST_IDEMPOTENCY,
             Capability.WEBHOOK_REPLAY,
+            Capability.CHECKOUT_ORDERS,
         }
     )
 
@@ -67,6 +70,10 @@ class MockProvider:
         self.payments: dict[str, ProviderPayment] = {}
         self.subs: dict[str, _Sub] = {}
         self.links: dict[str, PaymentLink] = {}
+        self.link_payments: dict[str, list[str]] = {}
+        self.orders: dict[str, CheckoutOrder] = {}
+        self.order_payments: dict[str, list[str]] = {}
+        self.checkout_key = "rzp_test_mock"
         self.refunds: dict[str, Refund] = {}
         self.disputes: dict[str, ProviderDispute] = {}
         self.documents: dict[str, tuple[str, int]] = {}
@@ -129,7 +136,8 @@ class MockProvider:
         return token, auth
 
     def charge(self, sub_id: str, *, succeed: bool, error_code: str | None = None,
-               at: datetime | None = None) -> ProviderPayment:
+               at: datetime | None = None, issuer: str | None = None,
+               error_reason: str | None = None) -> ProviderPayment:
         """Simulate the provider executing a mandate debit."""
         sub = self.subs[sub_id]
         pay = ProviderPayment(
@@ -139,11 +147,12 @@ class MockProvider:
             status=PaymentStatus.CAPTURED if succeed else PaymentStatus.FAILED,
             method="upi",
             error_code=None if succeed else (error_code or "BAD_REQUEST_ERROR"),
-            error_reason=None if succeed else "insufficient_funds",
+            error_reason=None if succeed else (error_reason or "insufficient_funds"),
             created_at=at or datetime.now(UTC),
             customer_ref=sub.customer_ref,
             subscription_ref=sub_id,
             token_ref=sub.token_ref,
+            issuer=issuer,
         )
         self.payments[pay.provider_payment_id] = pay
         sub.payments.append(pay.provider_payment_id)
@@ -228,7 +237,37 @@ class MockProvider:
                               at or datetime.now(UTC), notes={"reference_id": link.reference_id})
         self.payments[pay.provider_payment_id] = pay
         self.links[link_id] = PaymentLink("mock", link.link_id, link.url, link.amount, "paid", link.reference_id)
+        self.link_payments.setdefault(link_id, []).append(pay.provider_payment_id)
         return pay
+
+    def create_order(self, amount: Money, receipt: str, notes: Mapping[str, str]) -> CheckoutOrder:
+        order = CheckoutOrder("mock", self._next("order"), amount, receipt[:40], "created")
+        self.orders[order.order_id] = order
+        return order
+
+    def fetch_order_payments(self, order_id: str) -> list[ProviderPayment]:
+        return [self.payments[p] for p in self.order_payments.get(order_id, [])]
+
+    def _checkout_signature(self, order_id: str, payment_id: str) -> str:
+        return hmac.new(self.webhook_secret.encode(), f"{order_id}|{payment_id}".encode(), hashlib.sha256).hexdigest()
+
+    def verify_checkout(self, order_id: str, payment_id: str, signature: str) -> bool:
+        return hmac.compare_digest(self._checkout_signature(order_id, payment_id), signature or "")
+
+    def pay_order(self, order_id: str, at: datetime | None = None) -> tuple[ProviderPayment, str]:
+        """Simulate a customer paying in the hosted checkout: returns the payment and Razorpay-style signature."""
+        order = self.orders[order_id]
+        # like Razorpay: the payment carries the order id; the order's notes are NOT guaranteed to be copied
+        pay = ProviderPayment("mock", self._next("pay"), order.amount, PaymentStatus.CAPTURED, "upi", None, None,
+                              at or datetime.now(UTC), order_ref=order_id)
+        self.payments[pay.provider_payment_id] = pay
+        self.order_payments.setdefault(order_id, []).append(pay.provider_payment_id)
+        self.orders[order_id] = CheckoutOrder("mock", order_id, order.amount, order.receipt, "paid")
+        return pay, self._checkout_signature(order_id, pay.provider_payment_id)
+
+    def fetch_payment_link(self, link_id: str) -> LinkStatus:
+        link = self.links[link_id]
+        return LinkStatus(link_id, link.status, tuple(self.link_payments.get(link_id, [])))
 
     def webhook_for(self, provider_type: str, entity_key: str, entity: Mapping[str, Any],
                     at: datetime | None = None) -> tuple[dict[str, str], bytes]:
@@ -248,7 +287,7 @@ class MockProvider:
             "status": "captured" if p.status == PaymentStatus.CAPTURED else p.status.value,
             "method": p.method, "error_code": p.error_code, "error_reason": p.error_reason,
             "created_at": int(p.created_at.timestamp()) if p.created_at else None,
-            "customer_id": p.customer_ref, "token_id": p.token_ref,
+            "customer_id": p.customer_ref, "token_id": p.token_ref, "order_id": p.order_ref, "bank": p.issuer,
             "notes": {"subscription_id": p.subscription_ref, **dict(p.notes)} if p.subscription_ref
             else dict(p.notes),
         }

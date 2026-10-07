@@ -40,6 +40,7 @@ namespaces:
       MANDATE_REVOKED: {whatsapp: 0.25, voice: 0.35}
       CARD_EXPIRED: {whatsapp: 0.25, voice: 0.35}
       LIMIT_EXCEEDED: {whatsapp: 0.07, voice: 0.15}
+      NOT_PAID: {whatsapp: 0.08, voice: 0.12}       # pay-by-link not paid by the due date (P8.6)
       UNKNOWN: {whatsapp: 0.05, voice: 0.08}
 
   experiments:

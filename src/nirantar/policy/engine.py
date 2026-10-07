@@ -111,6 +111,7 @@ class ActionRequest:
     agent_disclosure_sent: bool = True   # lending: agent details sent before first recovery contact
     proposed_debit_at: datetime | None = None
     mandatory_kind: str | None = None    # set for legally required communications
+    customer_requested: bool = False     # the customer named this moment (e.g. their promised day): no fatigue budget
     environment: str = "local"
 
 
@@ -148,6 +149,19 @@ _CONDUCT_RULES = [(label, re.compile(p, re.IGNORECASE)) for label, p in (
      r"\b(inform|tell|call|contact)\b.*\b(family|relatives?|friends?|employer|neighbou?rs?|colleagues?)\b"),
     ("shaming", r"\bshame\b"), ("blacklisting threat", r"\bblacklist"),
     ("credit-score threat", r"\bcibil\b.*\bruin"),
+    # RBI fair practices: no intimidation, visit threats, seizure threats or humiliation (red team, ADR-0027)
+    ("threat of a visit by agents",
+     r"\b(send|sending|will (come|visit)|coming|visit|reach)\b.{0,40}\b(agents?|recovery (team|agents?)|our (people|"
+     r"boys|team))\b"),
+    ("threat of a visit by agents",
+     r"\b(agents?|recovery (team|agents?)|our (people|boys))\b.{0,40}\b(home|house|office|doorstep|workplace)\b"),
+    ("seizure threat", r"\b(seize|confiscate|repossess|take away your)\b"),
+    ("legal threat in an automated message", r"\b(FIR|court|legal (action|notice|proceedings?))\b"),
+    ("ultimatum ('or face consequences')", r"\bor (face|suffer)\b.{0,20}\bconsequences\b|\byou(\s+will|'ll) regret\b"),
+    ("insult", r"\b(stupid|idiot|liar|thief|cheater|useless)\b"),
+    ("threat (Hindi / Hinglish)", r"\b(ghar|office)\s+(aa\w*|bhej\w*|pahunch\w*)\b|\bbadnaam\b|\bizzat\b|"
+                                  r"\bdekh lenge\b|पुलिस|जेल|घर\s*(आ|भेज)|बदनाम"),
+    ("threat (Telugu)", r"పోలీస్|జైలు|ఇంటికి\s*(వస్త|పంప)"),
 )]
 _CONDUCT_PATTERNS = [rx for _, rx in _CONDUCT_RULES]
 
@@ -242,7 +256,8 @@ def evaluate(req: ActionRequest, cfg: TenantPolicyConfig | None = None) -> Decis
             retry_after = _next_window_start(local, window).astimezone(req.now_utc.tzinfo)
             hit(pid, Outcome.DENY, f"outside contact window {window[0]:%H:%M}-{window[1]:%H:%M} (local {local:%H:%M})")
         # fatigue budget
-        if req.contacts_last_7d >= cfg.max_contacts_7d and not mandatory:
+        # (a contact the customer asked for — their promised day — is not "fatigue"; consent/window/opt-out still apply)
+        if req.contacts_last_7d >= cfg.max_contacts_7d and not mandatory and not req.customer_requested:
             hit("NIR-GOV-FATIGUE-001", Outcome.DENY,
                 f"contact budget exhausted ({req.contacts_last_7d}/{cfg.max_contacts_7d} in 7 days)")
         # lending specifics

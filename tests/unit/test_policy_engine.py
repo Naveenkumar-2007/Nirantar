@@ -106,3 +106,16 @@ def test_tenants_can_only_tighten() -> None:
         TenantPolicyConfig().tightened({"contact_window": ("07:00", "22:00")})
     with pytest.raises(ValueError):
         TenantPolicyConfig().tightened({"predebit_notice_hours": 12})
+
+
+def test_customer_requested_contact_skips_only_the_fatigue_budget() -> None:
+    """The customer's own promised day: no fatigue budget, but consent, opt-out, window and conduct still apply."""
+    assert evaluate(req(contacts_last_7d=3, customer_requested=True)).outcome == Outcome.ALLOW
+    night = evaluate(req(contacts_last_7d=3, customer_requested=True, now_utc=NIGHT))
+    assert night.outcome == Outcome.DENY and "NIR-GOV-CONTACT-WINDOW-001" in ids(night)
+    no_consent = evaluate(req(customer_requested=True, consents={"whatsapp": False}))
+    assert "NIR-GOV-CONSENT-001" in ids(no_consent)
+    opted_out = evaluate(req(customer_requested=True, opted_out_channels=frozenset({"whatsapp"})))
+    assert opted_out.outcome == Outcome.DENY
+    rude = evaluate(req(customer_requested=True, message_text="pay now or we will inform your family"))
+    assert rude.outcome == Outcome.DENY

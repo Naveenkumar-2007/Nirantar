@@ -58,12 +58,13 @@ def upsert_payment(conn: Connection, tenant_id: str, p: ProviderPayment, *, debi
             text(
                 "INSERT INTO billing.payments (tenant_id, payment_id, provider, provider_payment_id, debit_id, "
                 "customer_id, amount_minor, currency, status, method, error_code, error_reason, "
-                "provider_created_at, raw_event_id) VALUES (:t, :pid, :p, :ppid, :d, :c, :a, :cur, :s, :m, :ec, "
-                ":er, :pc, :raw) ON CONFLICT (tenant_id, provider, provider_payment_id) DO NOTHING"
+                "provider_created_at, raw_event_id, issuer) VALUES (:t, :pid, :p, :ppid, :d, :c, :a, :cur, :s, :m, "
+                ":ec, :er, :pc, :raw, :iss) ON CONFLICT (tenant_id, provider, provider_payment_id) DO NOTHING"
             ),
             {"t": tenant_id, "pid": new_id("pmt"), "p": p.provider, "ppid": p.provider_payment_id, "d": debit_id,
              "c": customer_id, "a": p.amount.minor, "cur": p.amount.currency, "s": new_status.value,
-             "m": p.method, "ec": p.error_code, "er": p.error_reason, "pc": p.created_at, "raw": raw_event_id},
+             "m": p.method, "ec": p.error_code, "er": p.error_reason, "pc": p.created_at, "raw": raw_event_id,
+             "iss": p.issuer},
         )
         return new_status, True
     if new_status == current:

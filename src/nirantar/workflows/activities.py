@@ -27,12 +27,21 @@ from nirantar.ml.router import ModelRouter
 from nirantar.outcomes.service import close_cycle
 from nirantar.payments.domain import PaymentProvider
 from nirantar.payments.providers.resolver import ProviderResolver, provider_for
-from nirantar.payments.reconciliation import reconcile_open_debits
+from nirantar.payments.reconciliation import reconcile_open_debits, reconcile_payment_requests
 from nirantar.settings import runtime as tenant_runtime
+from nirantar.voice.exotel import default_client as default_voice
 from nirantar.workflows.types import StepInput
 
-_PROMISE = re.compile(r"\b(will pay|pay (today|tonight|tomorrow)|paying|i'?ll pay|salary|kal|tomorrow|tonight)\b",
-                      re.IGNORECASE)
+_PROMISE = re.compile(
+    r"\b(will pay|pay (today|tonight|tomorrow)|paying|i'?ll pay|salary|kal|parso|tomorrow|tonight|"
+    # Hinglish: "pay kar dunga", "de denge", "bhar dunga", "bhej dungi" …
+    r"(pay|payment|paisa|paise|bhugtan)\s+(kar|de|bhar|bhej)\s*(unga|ungi|dunga|dungi|denge|enge|doonga|dena)|"
+    r"(kar|de|bhar|bhej)\s*(dunga|dungi|denge|doonga|unga|ungi)|"
+    # romanised Telugu: "kadatanu", "kadatha", "chellistanu", "pay chestanu"
+    r"kad(a|u)t(a|h)(a|nu)?|kadatha|chellist(a|h)anu|pay\s+chest(a|h)anu|repu|ellundi)\b"
+    # Devanagari / Telugu script (no \b: word boundaries are ASCII-only here)
+    r"|कर दूंगा|दे दूंगा|भुगतान कर|कल|परसों|చెల్లిస్తాను|కడతాను|రేపు",
+    re.IGNORECASE)
 _CANCEL = re.compile(r"\b(cancel|unsubscribe|don'?t want)\b", re.IGNORECASE)
 _STOP = re.compile(r"^\s*stop\b", re.IGNORECASE)
 _DISTRESS = re.compile(r"\b(lost (my )?job|hospital|medical|can'?t afford|hardship|emergency)\b", re.IGNORECASE)
@@ -60,6 +69,7 @@ class Deps:
     features: OnlineStore | None         # online feature store (Redis); None → no risk prediction
     router: ModelRouter | None            # per-tenant champion / canary / shadow / prior
     environment: str = "local"
+    voice: Any = None                     # Exotel client (tests inject a fake); None → the deployment's, if any
 
 
 class DebitActivities:
@@ -69,7 +79,8 @@ class DebitActivities:
     def _gateway(self, step: StepInput) -> ToolGateway:
         return ToolGateway(
             self.d.engine, TOOLS, AGENT_SCOPES,
-            {"engine": self.d.engine, "provider": provider_for(self.d.provider, step.cycle.tenant_id),
+            {"engine": self.d.engine, "voice": self.d.voice or default_voice(),
+             "provider": provider_for(self.d.provider, step.cycle.tenant_id),
              "comms": self.d.comms,
              "experiment_id": step.cycle.experiment_id},
             clock=FixedClock(datetime.fromisoformat(step.now_iso)), environment=self.d.environment)
@@ -121,9 +132,20 @@ class DebitActivities:
                 "served_by": dec.served_by, "cold_start": of.cold_start,
                 "cash_day_distance": float(of.row["paid_day_distance"])}
 
+    def _method(self, tenant_id: str, debit_id: str) -> str:
+        with tenant_tx(tenant_id, self.d.engine) as c:
+            m: str = c.execute(text("SELECT s.collection_method FROM billing.debits d JOIN billing.subscriptions s ON "
+                                    "s.tenant_id=d.tenant_id AND s.subscription_id=d.subscription_id WHERE "
+                                    "d.tenant_id=:t AND d.debit_id=:d"), {"t": tenant_id, "d": debit_id}).scalar_one()
+        return m
+
     @activity.defn(name="pre_debit")
     def pre_debit(self, step: StepInput) -> dict[str, Any]:
         c_ = step.cycle
+        if self._method(c_.tenant_id, c_.debit_id) == "payment_link":
+            # nothing is auto-debited: an "auto-debit on <date>" notice would be false. The due-date payment request
+            # (collect) is the customer's notice.
+            return {"plan": None, "notice": {"status": "skipped", "reason": "pay-by-link: no auto-debit"}}
         with tenant_tx(c_.tenant_id, self.d.engine) as c:
             rt = tenant_runtime.load(c, c_.tenant_id)
         plan = debit_strategist.plan(debit_strategist.StrategyIn(
@@ -148,14 +170,47 @@ class DebitActivities:
     @activity.defn(name="reconcile")
     def reconcile(self, step: StepInput) -> dict[str, Any]:
         c_ = step.cycle
-        report = reconcile_open_debits(self.d.engine, provider_for(self.d.provider, c_.tenant_id), c_.tenant_id,
-                                       stale_after=timedelta(0),
+        provider = provider_for(self.d.provider, c_.tenant_id)
+        report = reconcile_open_debits(self.d.engine, provider, c_.tenant_id, stale_after=timedelta(0),
                                        clock=FixedClock(self._now(step)))
+        links = reconcile_payment_requests(self.d.engine, provider, c_.tenant_id, debit_id=c_.debit_id,
+                                           clock=FixedClock(self._now(step)))
+        report.scanned += links.scanned
+        report.changed += links.changed
         with tenant_tx(c_.tenant_id, self.d.engine) as c:
             status: str = c.execute(text("SELECT status FROM billing.debits WHERE tenant_id=:t AND debit_id=:d"),
                                {"t": c_.tenant_id, "d": c_.debit_id}).scalar_one()
         event = {"event_type": "payment.captured"} if status == "succeeded" else None
         return {"scanned": report.scanned, "changed": report.changed, "debit_status": status, "payment_event": event}
+
+    @activity.defn(name="collect")
+    def collect(self, step: StepInput) -> dict[str, Any]:
+        """Due date. Provider- and mandate-collected debits: the provider charges, nothing to do here. Pay-by-link:
+        send the payment request through the gateway (policy: consent, contact window, fatigue)."""
+        c_ = step.cycle
+        method = self._method(c_.tenant_id, c_.debit_id)
+        if method != "payment_link":
+            return {"method": method, "status": "provider_charges"}
+        r = self._gateway(step).call(tenant_id=c_.tenant_id, agent_id="billing_agent",
+                                     tool_name="billing.send_payment_request", args={"debit_id": c_.debit_id},
+                                     case_id=step.case_id)
+        return {"method": method, "status": r.status, "action_id": r.action_id, "url": r.output.get("url"),
+                "sent": r.output.get("sent"), "channel_error": r.output.get("channel_error"),
+                "error": r.error or r.output.get("error"),
+                "retry_after": r.decision.retry_after.isoformat() if r.decision and r.decision.retry_after else None}
+
+    @activity.defn(name="poll_link")
+    def poll_link(self, step: StepInput) -> dict[str, Any]:
+        """No webhook yet (or a missed one): ask the provider whether this debit's payment link was paid."""
+        c_ = step.cycle
+        report = reconcile_payment_requests(self.d.engine, provider_for(self.d.provider, c_.tenant_id), c_.tenant_id,
+                                            debit_id=c_.debit_id, clock=FixedClock(self._now(step)))
+        with tenant_tx(c_.tenant_id, self.d.engine) as c:
+            status: str = c.execute(text("SELECT status FROM billing.debits WHERE tenant_id=:t AND debit_id=:d"),
+                                    {"t": c_.tenant_id, "d": c_.debit_id}).scalar_one()
+        event = {"event_type": "payment.captured"} if status == "succeeded" else None
+        return {"scanned": report.scanned, "errors": report.errors[:3], "debit_status": status,
+                "payment_event": event}
 
     @activity.defn(name="handle_failure")
     def handle_failure(self, step: StepInput) -> dict[str, Any]:
@@ -164,33 +219,80 @@ class DebitActivities:
             d = c.execute(text("SELECT amount_minor, currency FROM billing.debits WHERE tenant_id=:t AND debit_id=:d"),
                           {"t": c_.tenant_id, "d": c_.debit_id}).one()
             rt = tenant_runtime.load(c, c_.tenant_id)
+            last = c.execute(text("SELECT method, issuer, coalesce(provider_created_at, created_at) AS at FROM "
+                                  "billing.payments WHERE tenant_id=:t AND debit_id=:d AND status='failed' ORDER BY "
+                                  "coalesce(provider_created_at, created_at) DESC LIMIT 1"),
+                             {"t": c_.tenant_id, "d": c_.debit_id}).first()
+            from nirantar.health.monitor import degraded_for
+
+            incident = degraded_for(c, last.method, last.issuer, last.at) if last else None
         state = handle_failure(
-            ConductorDeps(self._gateway(step), self.d.llm, rt.capacity, rt.priors, config_sources=rt.sources),
+            ConductorDeps(self._gateway(step), self.d.llm, rt.capacity, rt.priors, config_sources=rt.sources,
+                          bank_degraded=incident is not None),
             c_.tenant_id, step.case_id,
             FailedDebit(c_.debit_id, c_.customer_id, d.amount_minor, d.currency, step.payload.get("error_code"),
                         step.payload.get("error_reason"), attempt=int(step.payload.get("attempt", 1))))
-        return {"chosen_arm": state.get("chosen_arm"), "retry_after": state.get("retry_after"),
+        return {"chosen_arm": state.get("chosen_arm"), "retry_after": state.get("retry_after"), "incident": incident,
                 "triage": state.get("triage"), "exposure_arm": state.get("exposure_arm"),
                 "actions": state.get("action_results", []), "trace": state.get("trace", [])}
 
     @activity.defn(name="record_reply")
     def record_reply(self, step: StepInput) -> dict[str, Any]:
+        from nirantar.agents.promise import extract_promise_date
+
         c_ = step.cycle
-        intent = classify_reply(str(step.payload.get("text", "")))
+        said = str(step.payload.get("text", ""))
+        intent = classify_reply(said)
+        promised = step.payload.get("promised_date")
+        if intent == "promise_to_pay" and not promised:
+            found = extract_promise_date(said, self._now(step).date())
+            promised = found.isoformat() if found else None
         r = self._gateway(step).call(tenant_id=c_.tenant_id, agent_id="conductor", tool_name="case.record_reply",
                                      args={"customer_id": c_.customer_id, "debit_id": c_.debit_id, "intent": intent,
-                                           "promised_date": step.payload.get("promised_date")},
+                                           "promised_date": promised, "quote": said[:300] or None,
+                                           "source": "voice_note" if step.payload.get("via") == "audio"
+                                           else "whatsapp_text"},
                                      case_id=step.case_id,
                                      idempotency_key=f"reply:{c_.debit_id}:{step.payload.get('message_id')}")
         ack = self._gateway(step).call(tenant_id=c_.tenant_id, agent_id="conductor",
                                        tool_name="comms.acknowledge_reply",
                                        args={"customer_id": c_.customer_id, "intent": intent,
-                                             "promised_date": step.payload.get("promised_date"),
+                                             "promised_date": promised,
                                              "via": step.payload.get("via")},
                                        case_id=step.case_id,
                                        idempotency_key=f"ack:{c_.debit_id}:{step.payload.get('message_id')}")
         return {"intent": intent, "status": r.status, "memory_id": r.output.get("memory_id"),
+                "promise_id": r.output.get("promise_id"),
+                "promised_date": promised if intent == "promise_to_pay" else None,
                 "acknowledged": ack.status, "ack_error": ack.error or ack.output.get("error")}
+
+    @activity.defn(name="promise_remind")
+    def promise_remind(self, step: StepInput) -> dict[str, Any]:
+        """The promised day: the customer's own words come back as a reminder with a payment link."""
+        c_ = step.cycle
+        r = self._gateway(step).call(tenant_id=c_.tenant_id, agent_id="billing_agent",
+                                     tool_name="billing.send_payment_request",
+                                     args={"debit_id": c_.debit_id, "occasion": "promise"}, case_id=step.case_id,
+                                     idempotency_key=f"promise-remind:{step.payload.get('promised_date')}:{c_.debit_id}")
+        if r.status == "executed":
+            with tenant_tx(c_.tenant_id, self.d.engine) as c:
+                c.execute(text("UPDATE ops.promises SET reminder_sent_at=:n WHERE tenant_id=:t AND debit_id=:d AND "
+                               "status='open'"), {"n": self._now(step), "t": c_.tenant_id, "d": c_.debit_id})
+        return {"status": r.status, "sent": r.output.get("sent"), "url": r.output.get("url"),
+                "error": r.error or r.output.get("error")}
+
+    @activity.defn(name="promise_resolve")
+    def promise_resolve(self, step: StepInput) -> dict[str, Any]:
+        """Kept = the provider-verified payment arrived by the end of the promised day; otherwise broken."""
+        c_ = step.cycle
+        with tenant_tx(c_.tenant_id, self.d.engine) as c:
+            paid: bool = c.execute(text("SELECT status FROM billing.debits WHERE tenant_id=:t AND debit_id=:d"),
+                             {"t": c_.tenant_id, "d": c_.debit_id}).scalar_one() == "succeeded"
+            n = c.execute(text("UPDATE ops.promises SET status=:s, resolved_at=:n WHERE tenant_id=:t AND "
+                               "debit_id=:d AND status='open'"),
+                          {"s": "kept" if paid else "broken", "n": self._now(step), "t": c_.tenant_id,
+                           "d": c_.debit_id}).rowcount
+        return {"kept": paid, "resolved": n}
 
     @activity.defn(name="verify_and_close")
     def verify_and_close(self, step: StepInput) -> dict[str, Any]:
@@ -214,11 +316,25 @@ class DebitActivities:
             value = debit.amount_minor if outcome == "recovered" else 0
             closed = close_cycle(c, c_.tenant_id, c_.debit_id, c_.customer_id, outcome, verified, value,
                                  step.payload.get("prediction_id"), c_.experiment_id, step.case_id, self._now(step))
+        receipt = None
+        if closed.verified and closed.outcome in ("paid_on_time", "recovered") and \
+                self._method(c_.tenant_id, c_.debit_id) == "payment_link":
+            from nirantar.comms.sink import ChannelNotConnected
+
+            try:
+                r = self._gateway(step).call(tenant_id=c_.tenant_id, agent_id="billing_agent",
+                                             tool_name="comms.send_receipt", args={"debit_id": c_.debit_id},
+                                             case_id=step.case_id, idempotency_key=f"receipt:{c_.debit_id}")
+                receipt = {"status": r.status, "error": r.error}
+            except ChannelNotConnected as exc:          # the payment stands; the receipt can be re-sent later
+                receipt = {"status": "not_sent", "error": str(exc)[:200]}
         live = evaluate_live(self.d.engine, c_.tenant_id)
         return {"outcome": closed.outcome, "verified": closed.verified, "label_ids": closed.label_ids,
+                "receipt": receipt,
                 "experiment_outcome_id": closed.outcome_id, "outcome_event_id": closed.event_id,
                 "evidence": evidence, "live_eval": live}
 
     def all(self) -> list[Any]:
-        return [self.open_case, self.predict_risk, self.pre_debit, self.mark_attempting, self.reconcile,
-                self.handle_failure, self.record_reply, self.verify_and_close]
+        return [self.open_case, self.predict_risk, self.pre_debit, self.mark_attempting, self.reconcile, self.collect,
+                self.poll_link, self.handle_failure, self.record_reply, self.promise_remind, self.promise_resolve,
+                self.verify_and_close]

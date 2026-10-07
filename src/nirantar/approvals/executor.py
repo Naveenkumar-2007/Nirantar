@@ -61,7 +61,9 @@ class ApprovalExecutor:
             provider = provider_for(self.provider, tenant_id)
         except (ProviderNotConfigured, ValueError):
             provider = None              # tools that need a provider fail with a clear error; reads still work
-        return {"engine": self.engine, "provider": provider, "comms": self.comms}
+        from nirantar.voice.exotel import default_client
+
+        return {"engine": self.engine, "provider": provider, "comms": self.comms, "voice": default_client()}
 
     @staticmethod
     def toolset(agent_id: str) -> tuple[dict[str, Tool], dict[str, frozenset[str]]]:

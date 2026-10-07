@@ -24,6 +24,7 @@ from nirantar.core.money import Money
 from nirantar.payments.domain import (
     Capability,
     LinkRequest,
+    LinkStatus,
     NormalizedWebhook,
     NotSupported,
     PaymentLink,
@@ -192,6 +193,9 @@ class CashfreeProvider:
                                   headers={"x-idempotency-key": request.reference_id})
         return PaymentLink("cashfree", link["link_id"], link["link_url"], request.amount,
                            link.get("link_status", "ACTIVE"), request.reference_id)
+
+    def fetch_payment_link(self, link_id: str) -> LinkStatus:
+        raise NotSupported("cashfree link polling is not implemented yet; use webhooks (link status lives on orders)")
 
     def fetch_subscription(self, provider_subscription_id: str) -> ProviderSubscription:
         return self.to_subscription(self._http.request(

@@ -21,7 +21,9 @@ import httpx
 from nirantar.core.money import Money
 from nirantar.payments.domain import (
     Capability,
+    CheckoutOrder,
     LinkRequest,
+    LinkStatus,
     NormalizedWebhook,
     PaymentLink,
     PaymentStatus,
@@ -38,6 +40,7 @@ from nirantar.payments.domain import (
     lower_headers,
 )
 from nirantar.payments.http import ProviderHttp
+from nirantar.payments.issuer import issuer_of
 
 BASE_URL = "https://api.razorpay.com/v1"
 
@@ -128,6 +131,7 @@ class RazorpayProvider:
             Capability.PAUSE_SUBSCRIPTION,
             Capability.CHARGE_SUBSCRIPTION,
             Capability.PAYMENT_LINKS,
+            Capability.CHECKOUT_ORDERS,
             Capability.REFUNDS,
             Capability.REFUND_IDEMPOTENCY,
             Capability.DISPUTES,
@@ -139,6 +143,8 @@ class RazorpayProvider:
         if not key_id or not key_secret:
             raise ValueError("razorpay credentials required")
         self._base = base_url.rstrip("/")
+        self.checkout_key = key_id               # the PUBLIC key id Razorpay Checkout needs in the browser
+        self._signing_secret = key_secret.encode()
         self._http = http or ProviderHttp(
             provider=self.name,
             client=httpx.Client(auth=(key_id, key_secret), timeout=timeout_s),
@@ -172,6 +178,7 @@ class RazorpayProvider:
             order_ref=p.get("order_id"),
             notes=notes,
             token_ref=p.get("token_id"),
+            issuer=issuer_of(p),
         )
 
     @staticmethod
@@ -206,6 +213,31 @@ class RazorpayProvider:
             if len(items) < 100:
                 return
             skip += 100
+
+    def create_order(self, amount: Money, receipt: str, notes: Mapping[str, str]) -> CheckoutOrder:
+        """Orders API: the order a hosted checkout pays. `receipt` is Nirantar's id (max 40 chars)."""
+        if amount.currency != "INR":
+            raise ProviderRejected("razorpay orders are created in INR in Nirantar")
+        o = self._http.request("POST", f"{self._base}/orders", idempotent=False,
+                               json={"amount": amount.minor, "currency": "INR", "receipt": receipt[:40],
+                                     "notes": dict(notes)})
+        return CheckoutOrder("razorpay", str(o["id"]), Money(int(o["amount"])), str(o.get("receipt") or receipt),
+                             str(o.get("status", "created")))
+
+    def fetch_order_payments(self, order_id: str) -> list[ProviderPayment]:
+        page = self._http.request("GET", f"{self._base}/orders/{order_id}/payments", idempotent=True)
+        return [self.to_payment(p) for p in page.get("items", [])]
+
+    def verify_checkout(self, order_id: str, payment_id: str, signature: str) -> bool:
+        """Razorpay Standard Checkout: signature = HMAC-SHA256(order_id + "|" + payment_id, key_secret)."""
+        expected = hmac.new(self._signing_secret, f"{order_id}|{payment_id}".encode(), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected, signature or "")
+
+    def fetch_payment_link(self, link_id: str) -> LinkStatus:
+        """Payment Links API: the link's status and the payments made through it (polling path when no webhook)."""
+        link = self._http.request("GET", f"{self._base}/payment_links/{link_id}", idempotent=True)
+        payments = tuple(str(p["payment_id"]) for p in (link.get("payments") or []) if p.get("payment_id"))
+        return LinkStatus(str(link["id"]), str(link.get("status", "created")), payments)
 
     def _find_link(self, reference_id: str) -> Mapping[str, Any] | None:
         # Filtering by reference_id on the list endpoint is UNVERIFIED; we filter client-side as a fallback.

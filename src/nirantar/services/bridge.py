@@ -45,11 +45,12 @@ from nirantar.workflows import TASK_QUEUE
 from nirantar.workflows.bridge import debit_signal, workflow_id
 from nirantar.workflows.debit_cycle import DebitCycleWorkflow
 from nirantar.workflows.dispute import DisputeInput, DisputeWorkflow, dispute_workflow_id
+from nirantar.workflows.receivables import InvoiceChaseWorkflow, InvoiceInput, invoice_workflow_id
 from nirantar.workflows.types import CycleInput
 
 log = structlog.get_logger("event-bridge")
 CONSUMER = "event-bridge"
-TOPICS = ("provider", "subscription", "payment", "reply", "dispute", "mandate")
+TOPICS = ("provider", "subscription", "payment", "reply", "dispute", "mandate", "invoice")
 TERMINAL_DISPUTE = ("won", "lost", "accepted")
 TRANSIENT_RPC = (RPCStatusCode.UNAVAILABLE, RPCStatusCode.DEADLINE_EXCEEDED, RPCStatusCode.RESOURCE_EXHAUSTED)
 
@@ -122,6 +123,10 @@ class EventBridge:
             outcome = await self._dispute_updated(ev)
         elif t == "mandate.updated":
             outcome = await self._mandate_updated(ev)
+        elif t == "invoice.issued":
+            outcome = await self._start_invoice(ev)
+        elif t == "invoice.payment_verified":
+            outcome = await self._wake_invoice(ev)
         else:
             outcome = "ignored"
         self.stats[f"{t}:{outcome}"] += 1
@@ -186,6 +191,27 @@ class EventBridge:
             await self.client.get_workflow_handle(workflow_id(ev.tenant_id, ev.payload["debit_id"])).signal(*sig)
         except RPCError as exc:
             if exc.status == RPCStatusCode.NOT_FOUND:      # imported history / finished cycle: state is in the DB
+                return "no_workflow"
+            raise
+        return "signalled"
+
+    async def _start_invoice(self, ev: EventEnvelope) -> str:
+        """B2B receivables (ADR-0025): one escalation ladder per issued invoice."""
+        try:
+            await self.client.start_workflow(
+                InvoiceChaseWorkflow.run, InvoiceInput(ev.tenant_id, ev.payload["invoice_id"], ev.payload["due_on"]),
+                id=invoice_workflow_id(ev.tenant_id, ev.payload["invoice_id"]), task_queue=self.task_queue,
+                id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE)
+        except WorkflowAlreadyStartedError:
+            return "already_started"
+        return "started"
+
+    async def _wake_invoice(self, ev: EventEnvelope) -> str:
+        try:
+            await self.client.get_workflow_handle(
+                invoice_workflow_id(ev.tenant_id, ev.payload["invoice_id"])).signal("invoice_update", ev.payload)
+        except RPCError as exc:
+            if exc.status == RPCStatusCode.NOT_FOUND:
                 return "no_workflow"
             raise
         return "signalled"

@@ -22,6 +22,7 @@ TOPICS = frozenset(
         "mandate",
         "subscription",
         "dispute",
+        "invoice",                       # B2B receivables (ADR-0025)
         "reply",
         "call",
         "bank",

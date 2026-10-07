@@ -14,7 +14,9 @@ from nirantar.policy.engine import TenantPolicyConfig
 
 DEFAULTS_DIR = Path(__file__).resolve().parent / "defaults"
 ARMS = ("whatsapp", "voice")
-CATEGORIES = ("BANK_TECHNICAL", "INSUFFICIENT_FUNDS", "MANDATE_REVOKED", "CARD_EXPIRED", "LIMIT_EXCEEDED", "UNKNOWN")
+CATEGORIES = ("BANK_TECHNICAL", "INSUFFICIENT_FUNDS", "MANDATE_REVOKED", "CARD_EXPIRED", "LIMIT_EXCEEDED", "NOT_PAID",
+              "UNKNOWN")
+LEGACY_CATEGORIES = frozenset(CATEGORIES) - {"NOT_PAID"}     # priors saved before pay-by-link (P8.6) existed
 
 
 class _Strict(BaseModel):
@@ -57,6 +59,8 @@ class Effects(_Strict):
     @field_validator("prior")
     @classmethod
     def _valid_prior(cls, v: dict[str, dict[str, float]]) -> dict[str, dict[str, float]]:
+        if set(v) == LEGACY_CATEGORIES:      # saved before NOT_PAID: inherit the tenant's own most cautious prior
+            v = {**v, "NOT_PAID": dict(v["UNKNOWN"])}
         if set(v) != set(CATEGORIES):
             raise ValueError(f"prior must define exactly {list(CATEGORIES)}")
         for cat, arms in v.items():

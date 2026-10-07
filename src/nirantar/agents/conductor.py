@@ -137,6 +137,12 @@ def build(deps: ConductorDeps) -> Any:
                                 "template_ref": draft.template_ref,
                                 "language": draft.language,
                                 "denied_by": [h.policy_id for h in msg.decision.hits] if msg.decision else []})
+        elif state.get("chosen_arm") == "voice":
+            placed = call(state, "conversation_agent", "comms.place_call",
+                          {"customer_id": d.customer_id, "debit_id": d.debit_id})
+            results.append({"tool": "comms.place_call", "status": placed.status, "action_id": placed.action_id,
+                            "provider_ref": placed.output.get("provider_ref"), "error": placed.error,
+                            "denied_by": [h.policy_id for h in placed.decision.hits] if placed.decision else []})
         return {"action_results": results, "trace": _log(state, "act", results=results)}
 
     def exposure_node(state: State) -> State:

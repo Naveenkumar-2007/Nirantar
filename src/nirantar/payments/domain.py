@@ -22,6 +22,7 @@ class Capability(StrEnum):
     PAUSE_SUBSCRIPTION = "pause_subscription"
     CHARGE_SUBSCRIPTION = "charge_subscription"      # merchant-initiated charge on a mandate
     PAYMENT_LINKS = "payment_links"
+    CHECKOUT_ORDERS = "checkout_orders"              # orders + hosted checkout + signed payment confirmation
     REFUNDS = "refunds"
     REFUND_IDEMPOTENCY = "refund_idempotency"        # provider dedupes refunds on a merchant key
     REQUEST_IDEMPOTENCY = "request_idempotency"      # generic idempotency-key header
@@ -63,6 +64,7 @@ class ProviderPayment:
     order_ref: str | None = None
     notes: Mapping[str, str] = field(default_factory=dict)
     token_ref: str | None = None          # the mandate/token the provider debited (Razorpay payment.token_id)
+    issuer: str | None = None             # the bank / UPI PSP bank / wallet / card issuer (payment health unit)
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +123,22 @@ class PaymentLink:
     amount: Money
     status: str
     reference_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class CheckoutOrder:
+    provider: str
+    order_id: str
+    amount: Money
+    receipt: str
+    status: str                  # created | attempted | paid
+
+
+@dataclass(frozen=True, slots=True)
+class LinkStatus:
+    link_id: str
+    status: str                  # created | partially_paid | paid | expired | cancelled
+    payment_ids: tuple[str, ...]  # provider payment ids made through this link
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +213,7 @@ class PaymentProvider(Protocol):
     def fetch_payment(self, provider_payment_id: str) -> ProviderPayment: ...
     def list_payments(self, since: datetime, until: datetime) -> Iterator[ProviderPayment]: ...
     def create_payment_link(self, request: LinkRequest) -> PaymentLink: ...
+    def fetch_payment_link(self, link_id: str) -> LinkStatus: ...
     def fetch_subscription(self, provider_subscription_id: str) -> ProviderSubscription: ...
     def list_subscription_payments(self, provider_subscription_id: str) -> list[ProviderPayment]: ...
     def pause_subscription(self, provider_subscription_id: str) -> ProviderSubscription: ...

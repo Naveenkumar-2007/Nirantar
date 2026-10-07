@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from nirantar.llm.gateway import LLMGateway, LLMUnavailable
 
 Category = Literal["BANK_TECHNICAL", "INSUFFICIENT_FUNDS", "MANDATE_REVOKED", "CARD_EXPIRED", "LIMIT_EXCEEDED",
-                   "UNKNOWN"]
+                   "NOT_PAID", "UNKNOWN"]
 
 RULES: dict[str, str] = {
     "insufficient_balance": "INSUFFICIENT_FUNDS", "insufficient_funds": "INSUFFICIENT_FUNDS",
@@ -24,11 +24,12 @@ RULES: dict[str, str] = {
     "mandate_revoked": "MANDATE_REVOKED", "mandate_cancelled": "MANDATE_REVOKED", "token_cancelled": "MANDATE_REVOKED",
     "card_expired": "CARD_EXPIRED", "expired_card": "CARD_EXPIRED",
     "amount_exceeds_mandate_limit": "LIMIT_EXCEEDED", "mandate_limit_exceeded": "LIMIT_EXCEEDED",
+    "not_paid_by_due_date": "NOT_PAID",     # pay-by-link: nothing was declined, the customer has not paid yet
 }
 RETRY = {"BANK_TECHNICAL": True, "INSUFFICIENT_FUNDS": True, "MANDATE_REVOKED": False, "CARD_EXPIRED": False,
-         "LIMIT_EXCEEDED": False, "UNKNOWN": False}
+         "LIMIT_EXCEEDED": False, "NOT_PAID": False, "UNKNOWN": False}
 CONTACT = {"BANK_TECHNICAL": False, "INSUFFICIENT_FUNDS": True, "MANDATE_REVOKED": True, "CARD_EXPIRED": True,
-           "LIMIT_EXCEEDED": True, "UNKNOWN": False}
+           "LIMIT_EXCEEDED": True, "NOT_PAID": True, "UNKNOWN": False}
 
 
 class TriageIn(BaseModel):

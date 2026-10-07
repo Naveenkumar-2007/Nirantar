@@ -25,6 +25,9 @@ from nirantar.voice.turn import CallSession
 
 OnAction = Callable[[dict[str, Any], str], None]
 ScriptsFor = Callable[[dict[str, Any], str], dict[str, str]]     # (custom_parameters, language) → scripts
+ContextFor = Callable[[str], dict[str, Any]]                      # signed call token → server-side call context
+OnFinish = Callable[[dict[str, Any], "CallRecord", str | None], None]
+DECISIVE = ("promise_to_pay", "hardship", "opt_out")              # what the call is remembered for
 
 
 @dataclass
@@ -37,8 +40,13 @@ class CallRecord:
 
 
 def build_app(speech_factory: Callable[[], SpeechProvider], on_action: OnAction,
-              records: dict[str, CallRecord] | None = None, scripts_for: ScriptsFor | None = None) -> FastAPI:
-    app = FastAPI(title="nirantar-voice-gateway")
+              records: dict[str, CallRecord] | None = None, scripts_for: ScriptsFor | None = None,
+              context_for: ContextFor | None = None, on_finish: OnFinish | None = None,
+              app: FastAPI | None = None) -> FastAPI:
+    """With `context_for` (production), the call's content comes ONLY from the signed token in the stream (query
+    parameter `token`, or the custom parameter `token` / `CustomField`); anything else the stream claims is ignored.
+    Without it (unit tests), the stream's custom parameters are used."""
+    app = app or FastAPI(title="nirantar-voice-gateway")
     calls = records if records is not None else {}
 
     @app.websocket("/voice/exotel")
@@ -48,6 +56,16 @@ def build_app(speech_factory: Callable[[], SpeechProvider], on_action: OnAction,
         vad = EndOfUtterance(8000)
         stream_sid, record = "", None
         speaking_until = 0.0
+        ctx: dict[str, Any] = {}
+        decisive: str | None = None
+        finished = False
+
+        def finish() -> None:
+            nonlocal finished
+            if finished or record is None or on_finish is None or not ctx:
+                return
+            finished = True
+            on_finish(ctx, record, decisive)
 
         async def send_audio(pcm: bytes) -> None:
             nonlocal speaking_until
@@ -64,7 +82,17 @@ def build_app(speech_factory: Callable[[], SpeechProvider], on_action: OnAction,
                 if event == "start":
                     start = msg["start"]
                     stream_sid = start.get("stream_sid", "")
-                    params = start.get("custom_parameters", {})
+                    params = start.get("custom_parameters", {}) or {}
+                    if context_for is not None:
+                        token = ws.query_params.get("token") or params.get("token") or params.get("CustomField") or ""
+                        try:
+                            ctx = context_for(str(token))
+                        except ValueError:
+                            await ws.close(code=1008)             # policy violation: not a call we placed
+                            return
+                        params = {"language": ctx["language"], "merchant": ctx["merchant"],
+                                  "amount_text": ctx["amount_text"], **{k: v for k, v in ctx.items()
+                                                                         if k in ("tenant_id", "call_id")}}
                     lang = params.get("language", "en")
                     session = CallSession(language=lang, merchant=params.get("merchant", "your merchant"),
                                           amount_text=params.get("amount_text", ""), speech=speech_factory(),
@@ -86,18 +114,23 @@ def build_app(speech_factory: Callable[[], SpeechProvider], on_action: OnAction,
                         record.turns.append({"role": "caller", "text": result.transcript_redacted,
                                              "intent": result.intent, "stt_ms": result.stt_ms})
                         record.turns.append({"role": "agent", "text": result.reply_text, "tts_ms": result.tts_ms})
+                        if result.intent in DECISIVE:
+                            decisive = result.intent
                         if result.action != "none":
                             record.actions.append(result.action)
-                            on_action({"call_sid": record.call_sid, "intent": result.intent}, result.action)
+                            on_action({"call_sid": record.call_sid, "intent": result.intent, **ctx}, result.action)
                         await send_audio(result.reply_pcm)
                         if session.ended:
+                            finish()
                             await ws.send_text(json.dumps({"event": "stop", "stream_sid": stream_sid}))
                             await ws.close()
                             return
                 elif event == "stop":
+                    finish()
                     await ws.close()
                     return
         except WebSocketDisconnect:
+            finish()                                          # the caller hung up: the call still counts
             return
 
     return app

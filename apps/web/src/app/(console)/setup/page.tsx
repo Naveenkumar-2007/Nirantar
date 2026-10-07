@@ -1,11 +1,13 @@
+import Link from "next/link";
 import { api } from "@/lib/api";
 import { ist } from "@/lib/format";
 import { Badge, Card, PageHeader } from "@/components/kit";
+import { Button } from "@/components/ui/button";
 import { AutoRefresh, ImportButton, RazorpayForm } from "./forms";
 
 type Step = {
   key: string; title: string; status: "done" | "todo" | "running" | "failed" | "blocked"; detail: string;
-  started_at?: string; finished_at?: string; verified_at?: string;
+  started_at?: string; finished_at?: string; verified_at?: string; href?: string; optional?: boolean;
   models?: { model: string; title: string; ready: boolean; gaps: Record<string, { need: number; have: number }> }[];
 };
 type Onboarding = { business: string; steps: Step[]; complete: boolean };
@@ -20,15 +22,16 @@ const LABEL: Record<Step["status"], string> = {
 export default async function SetupPage() {
   const ob = await api<Onboarding>("/v1/onboarding");
   const by = Object.fromEntries(ob.steps.map((s) => [s.key, s])) as Record<string, Step>;
-  const done = ob.steps.filter((s) => s.status === "done").length;
+  const core = ob.steps.filter((s) => !s.optional);
+  const done = core.filter((s) => s.status === "done").length;
   return (
     <>
       <PageHeader title={`Set up ${ob.business}`}
         subtitle="Each step is verified for real before it's marked done — nothing here is simulated."
-        right={<div className="text-sm text-muted-foreground">{done} of {ob.steps.length} complete</div>} />
+        right={<div className="text-sm text-muted-foreground">{done} of {core.length} essential steps done</div>} />
       {by.history?.status === "running" && <AutoRefresh />}
       <div className="mb-6 h-2 overflow-hidden rounded-full bg-muted">
-        <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${(done / ob.steps.length) * 100}%` }} />
+        <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${(done / core.length) * 100}%` }} />
       </div>
       <ol className="space-y-4">
         {ob.steps.map((s, i) => (
@@ -41,7 +44,7 @@ export default async function SetupPage() {
                     {s.status === "done" ? "✓" : i + 1}
                   </span>
                   <div>
-                    <div className="font-medium">{s.title}</div>
+                    <div className="font-medium">{s.title}{s.optional && <span className="ml-2 text-xs font-normal text-muted-foreground">optional</span>}</div>
                     <div className="mt-0.5 text-sm text-muted-foreground">{s.detail}</div>
                     {s.verified_at && <div className="mt-0.5 text-xs text-muted-foreground">Verified {ist(s.verified_at)}</div>}
                   </div>
@@ -49,6 +52,9 @@ export default async function SetupPage() {
                 <Badge tone={TONE[s.status]}>{LABEL[s.status]}</Badge>
               </div>
               {s.key === "payments" && s.status !== "done" && <div className="mt-4 max-w-md"><RazorpayForm /></div>}
+              {s.href && s.status !== "done" && s.status !== "blocked" && s.key !== "payments" && (
+                <div className="mt-4"><Button asChild size="sm"><Link href={s.href}>{s.title}</Link></Button></div>
+              )}
               {s.key === "history" && (s.status === "todo" || s.status === "failed") && (
                 <div className="mt-4"><ImportButton label={s.status === "failed" ? "Try the import again" : "Import my history"} /></div>
               )}

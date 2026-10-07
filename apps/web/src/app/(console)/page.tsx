@@ -46,8 +46,24 @@ function Meter({ label, value, max, display, series = 1 }: {
 const STATUS_ORDER = ["succeeded", "attempting", "notified", "scheduled", "failed", "cancelled"];
 const rank = (s: string) => (STATUS_ORDER.includes(s) ? STATUS_ORDER.indexOf(s) : 99);
 
+type Today = {
+  date: string; collected_today: Money; due_today: Money; due_tomorrow: Money; overdue: Money; recovered_7d: Money;
+  promises_due_today: number; promises_broken_7d: number; approvals_waiting: number; live_incidents: number;
+};
+type Money = { n: number; minor: number };
+
+function Tile({ href, label, value, hint, alert }: { href: string; label: string; value: string; hint: string; alert?: boolean }) {
+  return (
+    <Link href={href} className={`rounded-xl border p-3 transition-colors hover:bg-accent/60 ${alert ? "border-danger/40 bg-danger-soft/40" : "border-border bg-card"}`}>
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-1 text-lg font-semibold tabular-nums">{value}</div>
+      <div className="text-xs text-muted-foreground">{hint}</div>
+    </Link>
+  );
+}
+
 export default async function OverviewPage() {
-  const o = await api<Overview>("/v1/overview");
+  const [o, t] = await Promise.all([api<Overview>("/v1/overview"), api<Today>("/v1/today")]);
   const succeeded = o.debits.by_status["succeeded"];
   const exp = o.experiment;
   const arms = exp ? Object.entries(exp.analysis.arms) : [];
@@ -59,6 +75,18 @@ export default async function OverviewPage() {
       <PageHeader eyebrow="Overview" title="Revenue, protected and proven"
         subtitle="What Nirantar's agents did and what it verifiably earned — every rupee here is confirmed with your payment provider and the ledger."
         right={<Button asChild variant="outline" size="sm"><Link href="/approvals">Review approvals<ArrowRight /></Link></Button>} />
+
+      <section aria-label="Today" className="mb-6">
+        <div className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">Today · {t.date}</div>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <Tile href="/debits?status=succeeded" label="Collected today" value={inr(t.collected_today.minor)} hint={`${t.collected_today.n} payments`} />
+          <Tile href="/debits?status=scheduled" label="Due today" value={inr(t.due_today.minor)} hint={`${t.due_today.n} due · tomorrow ${t.due_tomorrow.n}`} />
+          <Tile href="/recovery" label="Overdue" value={inr(t.overdue.minor)} hint={`${t.overdue.n} to recover`} alert={t.overdue.n > 0} />
+          <Tile href="/recovery" label="Promises today" value={String(t.promises_due_today)} hint={`${t.promises_broken_7d} broken this week`} />
+          <Tile href="/approvals" label="Your decisions" value={String(t.approvals_waiting)} hint="approvals waiting" alert={t.approvals_waiting > 0} />
+          <Tile href="/payment-health" label="Bank outages" value={String(t.live_incidents)} hint={t.live_incidents ? "customers not chased" : `recovered ${inr(t.recovered_7d.minor)} this week`} alert={t.live_incidents > 0} />
+        </div>
+      </section>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Stat emphasis label="Recovered (verified)" icon={<BadgeIndianRupee />} value={inr(o.recovered.amount_minor)}

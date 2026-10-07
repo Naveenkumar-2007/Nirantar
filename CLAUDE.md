@@ -161,4 +161,23 @@ a Conversations inbox (WhatsApp bodies encrypted with the tenant key, migration 
 P8.5 Recovery Command Centre: computed queue (declines, M1 at-risk, mandate cases) with own-history expected ₹,
 gateway dry-run preview, operator batches = experiments with a randomised holdout (RecoveryBatchWorkflow, stop,
 window retries), verified proof report, human inbox replies via comms.operator_reply — ADR-0021.
-Next: P8.4 public URL (inbound webhooks), P9 multi-agent v2, P10 new recovery fronts, P8.6 CI + soak + Helm.
+P8.6 billing loop: plans, enrollment, BillingSweepWorkflow (Nirantar owns the schedule), pay-by-link collection
+in DebitCycleWorkflow (patched; 30-min polling, NOT_PAID recovery), every link tracked in billing.payment_requests,
+hosted pay page on Razorpay Orders + Checkout (signed token, signature-verified confirm) — ADR-0022.
+Pilot readiness (ADR-0023): deploy kit (deploy/: compose.prod, Caddy, non-root images, backups, .env.example),
+public-surface rate limits, CSV customer import (dry run first), webhook attribution by order id, receipts
+(post-debit notice), promise-to-pay (Hinglish/Telugu dates, ops.promises, patched workflow, customer-requested
+reminder exempt from fatigue only).
+Founder flow: setup checklist (plan → customers → first payment; history optional), Overview "Today" strip.
+Payment health (ADR-0024): issuer from provider fields, platform-wide hourly aggregates, M4 BOCPD onset + elevated
+state, live BANK_TECHNICAL triage, PaymentHealthWorkflow (15 min) with honest post-outage retry links.
+B2B receivables (ADR-0025): invoices (ledgered at issue, verified partial payments), InvoiceChaseWorkflow ladder
+(final notice always approved, +30 → collections case), dispute/write-off governance, ageing; one statement per
+customer per day with a pay-all link (FIFO allocation → billing.payment_allocations), window-denied steps deferred.
+Gateway: same idempotency key → advisory lock + 'executing' lease, so a concurrent caller gets `in_progress`.
+Live voice (ADR-0026): comms.place_call (Exotel connect-to-flow, voice_call policy incl. registered header), signed
+call token → server-side context in the Voicebot gateway (/voice/exotel), outcomes → promise + WhatsApp link /
+hardship case / opt-out, encrypted transcripts, Exotel status webhook; tests can never dial (EXOTEL_* stripped).
+AI security round 2 (ADR-0027): security/guardrails.py (normalise, redact PII, injection detection) inside the LLM
+gateway; stricter RBI conduct rules (red team found a visit-threat gap); tests/security red-team suite.
+Next: go-live (founder: server + domain), WhatsApp permanent token → submit templates, checkout recovery, multi-agent v2 + agent evals, mandate charging, CI + load tests.

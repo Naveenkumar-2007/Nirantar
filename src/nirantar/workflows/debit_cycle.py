@@ -19,6 +19,12 @@ from temporalio.common import RetryPolicy
 with workflow.unsafe.imports_passed_through():
     from nirantar.workflows.types import CycleInput, StepInput
 
+PAY_BY_LINK = "pay-by-link-collection-v1"          # P8.6: patched in; replay-safe for histories recorded before
+PROMISES = "promise-to-pay-v1"                       # P10: honour a customer's promised date
+PROMISE_MAX = timedelta(days=30)
+LINK_POLL = timedelta(minutes=30)
+COLLECT_TRIES = 3
+
 ACT = {"start_to_close_timeout": timedelta(seconds=90),
        "retry_policy": RetryPolicy(initial_interval=timedelta(seconds=1), backoff_coefficient=2.0,
                                    maximum_interval=timedelta(minutes=2), maximum_attempts=6)}
@@ -33,6 +39,10 @@ class DebitCycleWorkflow:
         self._handled_replies = 0
         self.stage = "init"
         self.trace: list[dict[str, Any]] = []
+        self._by_link = False                 # set only on the patched path (replay-safe)
+        self._promise: str | None = None      # ISO date the customer promised to pay (patched path only)
+        self._promise_polling = False
+        self._honouring: str | None = None    # the promise currently being honoured
 
     # ---- signals / queries ------------------------------------------------------
     @workflow.signal
@@ -64,8 +74,10 @@ class DebitCycleWorkflow:
     async def _drain_replies(self, inp: CycleInput, case_id: str) -> None:
         while self._handled_replies < len(self._replies):
             reply = self._replies[self._handled_replies]
-            await self._act("record_reply", self._step(inp, case_id, **reply))
+            res = await self._act("record_reply", self._step(inp, case_id, **reply))
             self._handled_replies += 1
+            if res.get("promised_date") and workflow.patched(PROMISES):
+                self._promise = str(res["promised_date"])
 
     async def _wait(self, until: datetime, inp: CycleInput, case_id: str) -> None:
         """Wait until `until`, waking early for payment or replies (replies are processed immediately)."""
@@ -73,12 +85,63 @@ class DebitCycleWorkflow:
             remaining = until - workflow.now()
             if remaining <= timedelta(0):
                 return
+            poll = (self._by_link or self._promise_polling) and remaining > LINK_POLL  # no charge event by itself
             try:
                 await workflow.wait_condition(
-                    lambda: self._captured or self._handled_replies < len(self._replies), timeout=remaining)
+                    lambda: self._captured or self._handled_replies < len(self._replies),
+                    timeout=LINK_POLL if poll else remaining)
             except TimeoutError:
-                return
+                if not poll:
+                    return
+                polled = await self._act("poll_link", self._step(inp, case_id))
+                if polled.get("payment_event"):
+                    self.payment_update(polled["payment_event"])
+                continue
             await self._drain_replies(inp, case_id)
+            if self._promise is not None and self._promise != self._honouring:
+                return                                     # a new promise takes over at once (patched path only)
+
+    async def _honour_promise(self, inp: CycleInput, case_id: str, deadline: datetime) -> datetime:
+        """No chasing until the promised day; that morning a reminder with a link; kept or broken by the end of the
+        day (provider-verified). A promise can extend the recovery window, never beyond PROMISE_MAX from now."""
+        promised = self._promise or ""
+        y, m, d = (int(x) for x in promised[:10].split("-"))
+        start = datetime(y, m, d, 4, 0, tzinfo=workflow.now().tzinfo)     # 04:00 UTC ≈ 09:30 IST: window open
+        end = start + timedelta(days=1)
+        if end - workflow.now() > PROMISE_MAX:
+            self._promise = None                                         # too far out: not honoured as a pause
+            return deadline
+        deadline = max(deadline, end)
+        self.stage = "promised"
+        self._promise_polling = True
+        self._honouring = promised
+        if workflow.now() < start:
+            await self._wait(start, inp, case_id)
+        if self._promise == promised and not self._captured:
+            await self._act("promise_remind", self._step(inp, case_id, promised_date=promised))
+            await self._wait(end, inp, case_id)
+        if self._promise == promised:                                    # not superseded by a newer promise
+            await self._act("promise_resolve", self._step(inp, case_id))
+            self._promise = None
+        self._promise_polling = False
+        self._honouring = None
+        return deadline
+
+    async def _collect(self, inp: CycleInput, case_id: str) -> bool:
+        """Due-date collection. True when Nirantar collects this debit by payment link."""
+        self.stage = "collecting"
+        for _ in range(COLLECT_TRIES):
+            res = await self._act("collect", self._step(inp, case_id))
+            if res.get("method") != "payment_link":
+                return False
+            if res.get("status") == "denied" and res.get("retry_after"):
+                self.stage = "waiting_contact_window"      # e.g. due at night: send when the window opens
+                await self._wait(datetime.fromisoformat(res["retry_after"]), inp, case_id)
+                if self._captured:
+                    return True
+                continue
+            return True
+        return True
 
     # ---- run ------------------------------------------------------------------------
     @workflow.run
@@ -102,15 +165,35 @@ class DebitCycleWorkflow:
             await workflow.sleep(debit_at - workflow.now())
         await self._act("mark_attempting", self._step(inp, case_id))
 
+        by_link = False
+        if workflow.patched(PAY_BY_LINK):
+            by_link = self._by_link = await self._collect(inp, case_id)
+
         self.stage = "awaiting_payment"
-        try:
-            await workflow.wait_condition(lambda: self._payment is not None,
-                                          timeout=timedelta(hours=inp.payment_wait_hours))
-        except TimeoutError:
-            self.stage = "reconciling"
-            recon = await self._act("reconcile", self._step(inp, case_id))
-            if recon.get("payment_event"):
-                self.payment_update(recon["payment_event"])
+        if by_link:
+            # no provider charge will arrive by itself: poll the link until paid or the wait is over (a webhook, when
+            # one is configured, signals earlier and ends the wait at once)
+            until = workflow.now() + timedelta(hours=inp.payment_wait_hours)
+            while not self._captured and workflow.now() < until:
+                try:
+                    await workflow.wait_condition(lambda: self._captured,
+                                                  timeout=min(LINK_POLL, until - workflow.now()))
+                except TimeoutError:
+                    polled = await self._act("poll_link", self._step(inp, case_id))
+                    if polled.get("payment_event"):
+                        self.payment_update(polled["payment_event"])
+            if not self._captured:
+                self._payment = {"event_type": "payment.not_paid", "error_code": "NOT_PAID",
+                                 "error_reason": "not_paid_by_due_date"}
+        else:
+            try:
+                await workflow.wait_condition(lambda: self._payment is not None,
+                                              timeout=timedelta(hours=inp.payment_wait_hours))
+            except TimeoutError:
+                self.stage = "reconciling"
+                recon = await self._act("reconcile", self._step(inp, case_id))
+                if recon.get("payment_event"):
+                    self.payment_update(recon["payment_event"])
 
         if self._captured:
             outcome = "paid_on_time"
@@ -118,7 +201,12 @@ class DebitCycleWorkflow:
             failure = self._payment or {"event_type": "payment.unknown", "error_code": None, "error_reason": None}
             deadline = workflow.now() + timedelta(days=inp.recovery_window_days)
             rounds = 0
-            while not self._captured and workflow.now() < deadline and rounds < inp.max_contact_rounds:
+            while not self._captured and workflow.now() < deadline:
+                if self._promise is not None:
+                    deadline = await self._honour_promise(inp, case_id, deadline)
+                    continue
+                if rounds >= inp.max_contact_rounds:
+                    break
                 rounds += 1
                 self.stage = "recovery"
                 res = await self._act("handle_failure", self._step(

@@ -27,6 +27,10 @@ _load_dotenv()
 if os.environ.get("NIRANTAR_LIVE_WHATSAPP") != "1":
     for _k in [k for k in os.environ if k.startswith("WHATSAPP_")]:
         os.environ.pop(_k)
+# …and never place a real phone call: the Exotel account is removed unless explicitly asked (NIRANTAR_LIVE_VOICE=1).
+if os.environ.get("NIRANTAR_LIVE_VOICE") != "1":
+    for _k in [k for k in os.environ if k.startswith("EXOTEL_")]:
+        os.environ.pop(_k)
 
 APP_URL = os.environ.get(
     "DATABASE_URL", "postgresql+psycopg://nirantar_app:nirantar_app@localhost:25432/nirantar"

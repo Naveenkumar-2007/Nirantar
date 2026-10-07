@@ -51,6 +51,15 @@ def find_debit(conn: Connection, tenant_id: str, p: ProviderPayment) -> tuple[st
         ).one_or_none()
         if row:
             return row.debit_id, row.customer_id, row.amount_minor
+    if p.order_ref:      # a Nirantar pay page: the order is recorded against its debit (notes may not be copied)
+        row = conn.execute(
+            text("SELECT d.debit_id, d.customer_id, d.amount_minor FROM billing.payment_requests r JOIN billing.debits "
+                 "d ON d.tenant_id=r.tenant_id AND d.debit_id=r.debit_id WHERE r.tenant_id=:t AND r.provider=:p AND "
+                 "r.kind='checkout' AND r.provider_link_id=:o"),
+            {"t": tenant_id, "p": p.provider, "o": p.order_ref},
+        ).one_or_none()
+        if row:
+            return row.debit_id, row.customer_id, row.amount_minor
     if p.subscription_ref:
         row = conn.execute(
             text(
@@ -113,8 +122,34 @@ def apply_dispute(conn: Connection, tenant_id: str, provider: PaymentProvider, p
     return ProcessOutcome("processed", event, debit_id, row.dispute_id)
 
 
+def find_invoices(conn: Connection, tenant_id: str, p: ProviderPayment) -> list[str]:
+    """B2B receivables: the invoice(s) a payment is for — our reference on a link (an invoice, or a statement
+    request), or the order recorded against an invoice / statement."""
+    ref = (p.notes.get("nirantar_ref") or p.notes.get("reference_id") or "").split(".", 1)[0]
+    if ref.startswith("ivc_"):
+        return [ref]
+    row = None
+    if ref.startswith("prq_"):
+        row = conn.execute(text("SELECT invoice_id, invoice_ids FROM billing.payment_requests WHERE tenant_id=:t AND "
+                                "request_id=:r"), {"t": tenant_id, "r": ref}).first()
+    elif p.order_ref:
+        row = conn.execute(text(
+            "SELECT invoice_id, invoice_ids FROM billing.payment_requests WHERE tenant_id=:t AND provider=:p AND "
+            "kind='checkout' AND provider_link_id=:o"), {"t": tenant_id, "p": p.provider, "o": p.order_ref}).first()
+    if row is None:
+        return []
+    return [row.invoice_id] if row.invoice_id else list(row.invoice_ids or [])
+
+
 def apply_payment(conn: Connection, tenant_id: str, provider: PaymentProvider, p: ProviderPayment,
                   now: datetime, raw_event_id: str | None, clock: Clock | None) -> ProcessOutcome:
+    invoice_ids = find_invoices(conn, tenant_id, p)
+    if invoice_ids:                               # B2B receivables (ADR-0025): verified, partial-aware, ledgered
+        from nirantar.receivables.service import allocate
+
+        res = allocate(conn, tenant_id, provider, invoice_ids, p, now)
+        return ProcessOutcome("processed", "invoice.payment_verified" if res["applied"] else None, None,
+                              str(res.get("status") or res.get("reason") or ""))
     link = find_debit(conn, tenant_id, p)
     offer = None if link else find_offer(conn, tenant_id, p)
     debit_id, customer_id, due_minor = link if link else (None, None, None)

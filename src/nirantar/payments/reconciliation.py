@@ -7,6 +7,7 @@ the same idempotent `apply_payment` path that webhooks use.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -79,4 +80,52 @@ def reconcile_open_debits(engine: Engine, provider: PaymentProvider, tenant_id: 
             if outcome.event_type:
                 report.changed += 1
                 report.events.append(outcome.event_type)
+    return report
+
+
+def reconcile_payment_requests(engine: Engine, provider: PaymentProvider, tenant_id: str,
+                               debit_id: str | None = None, clock: Clock | None = None) -> ReconReport:
+    """Pay-by-link debits (P8.6): ask the provider about every open payment link and apply its payments through the
+    same idempotent path webhooks use. The link → debit mapping is Nirantar's own record, so a payment is attributed
+    to the right debit even if the provider did not copy the link's notes onto the payment."""
+    report = ReconReport()
+    now = (clock or SystemClock()).now()
+    with tenant_tx(tenant_id, engine) as c:
+        rows = c.execute(text(
+            "SELECT r.request_id, r.provider_link_id, r.debit_id, r.invoice_id, r.invoice_ids, r.kind "
+            "FROM billing.payment_requests r WHERE "
+            "r.tenant_id=:t AND r.provider=:p AND r.status IN ('created','sent') "
+            "AND (CAST(:d AS text) IS NULL OR r.debit_id=:d OR r.invoice_id=:d OR :d = ANY(r.invoice_ids))"),
+            {"t": tenant_id, "p": provider.name, "d": debit_id}).all()
+    for r in rows:
+        try:
+            if r.kind == "checkout":                     # a Nirantar pay page: the provider order holds the payments
+                payments = provider.fetch_order_payments(r.provider_link_id)  # type: ignore[attr-defined]
+                link_status = "created"
+            else:
+                link = provider.fetch_payment_link(r.provider_link_id)
+                payments = [provider.fetch_payment(pid) for pid in link.payment_ids]
+                link_status = link.status
+        except ProviderError as exc:
+            report.errors.append(f"{r.provider_link_id}: {exc}")
+            continue
+        paid_by: str | None = None
+        for p in payments:
+            report.scanned += 1
+            p = dataclasses.replace(p, notes={**dict(p.notes),
+                                              "nirantar_ref": r.debit_id or r.invoice_id or r.request_id})
+            with tenant_tx(tenant_id, engine) as c:
+                outcome = apply_payment(c, tenant_id, provider, p, now, None, clock)
+            if outcome.event_type:
+                report.changed += 1
+                report.events.append(outcome.event_type)
+            if outcome.event_type == "payment.captured" or p.status.value == "captured":
+                paid_by = p.provider_payment_id
+        status = "paid" if paid_by else {"expired": "expired", "cancelled": "cancelled"}.get(link_status)
+        if status:
+            with tenant_tx(tenant_id, engine) as c:
+                c.execute(text("UPDATE billing.payment_requests SET status=:s, provider_payment_id=:pp, "
+                               "paid_at=CASE WHEN :s='paid' THEN CAST(:n AS timestamptz) END "
+                               "WHERE tenant_id=:t AND request_id=:r"),
+                          {"s": status, "pp": paid_by, "n": now, "t": tenant_id, "r": r.request_id})
     return report

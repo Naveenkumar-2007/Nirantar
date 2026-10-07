@@ -102,6 +102,11 @@ def checklist(engine: Engine, tenant: str) -> dict[str, Any]:
         s = _settings(c, tenant)
         name: str = c.execute(text("SELECT name FROM core.tenants WHERE tenant_id=:t"), {"t": tenant}).scalar_one()
         accounts = c.execute(text("SELECT provider, mode FROM core.provider_accounts")).all()
+        plans = int(c.execute(text("SELECT count(*) FROM billing.plans WHERE active")).scalar_one())
+        customers = int(c.execute(text("SELECT count(*) FROM billing.customers")).scalar_one())
+        enrolled = int(c.execute(text("SELECT count(*) FROM billing.subscriptions WHERE status='active'")).scalar_one())
+        links = c.execute(text("SELECT count(*) AS n, count(*) FILTER (WHERE status='paid') AS paid FROM "
+                               "billing.payment_requests")).one()
     ob = s.get("onboarding", {})
     pay = ob.get("payments")
     payments = {"key": "payments", "title": "Connect payments",
@@ -127,10 +132,27 @@ def checklist(engine: Engine, tenant: str) -> dict[str, Any]:
                  "status": "done" if any(r["ready"] for r in ready) else ("todo" if rep else "blocked"),
                  "detail": (f"{sum(r['ready'] for r in ready)} of {len(ready)} models have enough history"
                             if rep else "Appears after your history is imported"), "models": ready}
+    plan = {"key": "plan", "title": "Create a plan", "href": "/plans",
+            "status": "done" if plans else ("todo" if accounts else "blocked"),
+            "detail": f"{plans} active plan{'s' if plans != 1 else ''}" if plans else
+            "What you sell on repeat: name, price and how often (e.g. Chai Monthly, ₹499 every month)"}
+    people = {"key": "customers", "title": "Add your customers", "href": "/customers",
+              "status": "done" if customers and enrolled else ("todo" if plans else "blocked"),
+              "detail": (f"{customers} customers · {enrolled} on a plan" if customers else
+                         "Add them one by one or import your list (CSV) — with how each agreed to WhatsApp")}
+    first = {"key": "first_payment", "title": "Collect your first payment", "href": "/customers",
+             "status": "done" if links.paid else ("running" if links.n else ("todo" if enrolled else "blocked")),
+             "detail": (f"{links.paid} paid through Nirantar" if links.paid else
+                        f"{links.n} payment link{'s' if links.n != 1 else ''} sent — waiting for the first payment"
+                        if links.n else "On the due date Nirantar sends the link; or open a customer and press "
+                        "'Send payment link now'")}
     steps: list[dict[str, Any]] = [{"key": "business", "title": "Create your business", "status": "done",
                                     "detail": name},
-                                   payments, messaging, history, readiness]
-    return {"business": name, "steps": steps, "complete": all(st["status"] == "done" for st in steps)}
+                                   payments, plan, people, first, messaging,
+                                   {**history, "optional": True},          # a new business has no history:
+                                   {**readiness, "optional": True}]        # neither step blocks setup
+    core = [st for st in steps if not st.get("optional")]
+    return {"business": name, "steps": steps, "complete": all(st["status"] == "done" for st in core)}
 
 
 def _summary(s: dict[str, Any]) -> str:

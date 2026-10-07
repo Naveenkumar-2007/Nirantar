@@ -104,6 +104,54 @@ class RetireIn(BaseModel):
     reason: str
 
 
+class PlanIn(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    amount_rupees: float = Field(ge=1, le=100_000)
+    interval: str = Field(pattern=r"^(weekly|monthly|quarterly|yearly)$")
+    collection_method: str = Field(default="payment_link", pattern=r"^(payment_link|mandate)$")
+    description: str | None = Field(default=None, max_length=300)
+
+
+class CustomerIn(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    phone: str = Field(pattern=r"^\+[1-9][0-9]{7,14}$")              # E.164
+    email: str | None = Field(default=None, max_length=200, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    language: str = Field(default="en", pattern=r"^(en|hi|te)$")
+    reference: str | None = Field(default=None, max_length=64)
+    whatsapp_consent: bool
+    consent_source: str | None = Field(default=None, max_length=200)   # where/how the customer agreed
+
+
+class EnrollIn(BaseModel):
+    customer_id: str = Field(pattern=r"^cus_[0-9A-Z]{26}$")
+    plan_id: str = Field(pattern=r"^pln_[0-9A-Z]{26}$")
+    start_on: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+class CheckoutConfirmIn(BaseModel):
+    razorpay_order_id: str = Field(min_length=6, max_length=64)
+    razorpay_payment_id: str = Field(min_length=6, max_length=64)
+    razorpay_signature: str = Field(min_length=16, max_length=128)
+
+
+class ImportIn(BaseModel):
+    csv: str = Field(min_length=10, max_length=1_000_000)
+    dry_run: bool = True
+
+
+class InvoiceIn(BaseModel):
+    customer_id: str = Field(pattern=r"^cus_[0-9A-Z]{26}$")
+    number: str = Field(min_length=1, max_length=40)
+    amount_rupees: float = Field(ge=1, le=10_000_000)
+    issued_on: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    due_on: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    description: str | None = Field(default=None, max_length=300)
+
+
+class InvoiceStatusIn(BaseModel):
+    reason: str | None = Field(default=None, max_length=300)
+
+
 class BatchItemsIn(BaseModel):
     item_ids: list[str] = Field(min_length=1, max_length=500)
 
@@ -159,12 +207,27 @@ def approval_executor(s: Services) -> Any:
 def create_app(svc: Services | None = None) -> FastAPI:
     app = FastAPI(title="Nirantar API", version="0.1.0", default_response_class=JSON)
     app.state.services = svc or default_services()
+    s_root: Services = app.state.services
     app.add_middleware(CORSMiddleware, allow_origins=os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(","),
                        allow_methods=["GET", "POST", "PUT"], allow_headers=["Authorization", "Content-Type"])
 
     @app.exception_handler(queries.BadCursor)
     async def bad_cursor(_: Request, exc: queries.BadCursor) -> JSONResponse:
         return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    from nirantar.api.ratelimit import RateLimiter
+
+    limiter: RateLimiter = app.state.services.extra.get("rate_limiter") or RateLimiter()
+
+    @app.middleware("http")
+    async def rate_limit(request: Request, call_next: Any) -> Any:
+        """Unauthenticated surfaces only (pay page, webhooks); signed-in traffic is bounded by identity instead."""
+        client = request.client.host if request.client else "unknown"
+        ok, retry = limiter.allow(request.url.path, request.method, client)
+        if not ok:
+            return JSONResponse({"detail": "too many requests"}, status_code=429,
+                                headers={"Retry-After": str(retry)})
+        return await call_next(request)
 
     @app.middleware("http")
     async def request_id(request: Request, call_next: Any) -> Any:
@@ -250,6 +313,368 @@ def create_app(svc: Services | None = None) -> FastAPI:
         if "TemplateNotApproved" in detail:
             detail = "the customer has not written in the last 24 hours: WhatsApp allows only approved templates"
         raise HTTPException(409, {"status": r.status, "reason": detail, "action_id": r.action_id})
+
+    # ---------------------------------------------------------------- plans and enrollment (P8.6, ADR-0022)
+    @app.get("/v1/plans")
+    def plans_list(c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        from nirantar.billing.plans import list_plans
+
+        return {"items": list_plans(c)}
+
+    @app.post("/v1/plans")
+    def plans_create(body: PlanIn, p: Principal = Depends(require(Permission.SUBSCRIPTIONS_WRITE)),
+                     s: Services = Depends(services)) -> dict[str, Any]:
+        from decimal import Decimal
+
+        from nirantar.billing.plans import NewPlan, PlanError, create_plan
+        from nirantar.core.money import Money
+
+        amount = Money.of(str(Decimal(str(body.amount_rupees)).quantize(Decimal("0.01"))))
+        try:
+            with tenant_tx(p.tenant_id, s.engine) as c:
+                pid = create_plan(c, p.tenant_id, NewPlan(body.name, amount, body.interval, body.collection_method,
+                                                          body.description), _actor(p))
+                AuditChain(SqlAuditStore(c), FixedClock(datetime.now(UTC))).append(
+                    p.tenant_id, _actor(p), "plan.created", {"plan_id": pid, "amount_minor": amount.minor})
+        except PlanError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"plan_id": pid}
+
+    @app.post("/v1/customers")
+    def customers_create(body: CustomerIn, p: Principal = Depends(require(Permission.CUSTOMERS_WRITE)),
+                         s: Services = Depends(services)) -> dict[str, Any]:
+        """Add a customer. Contact details are encrypted with the business's key; WhatsApp consent must be explicit
+        and is stored with its evidence (who recorded it, where the customer agreed, when)."""
+        from nirantar.billing.service import NewCustomer, create_customer
+
+        if body.whatsapp_consent and not (body.consent_source or "").strip():
+            raise HTTPException(422, "say how the customer agreed to WhatsApp messages (e.g. 'signup form')")
+        now = datetime.now(UTC)
+        consents: dict[str, Any] = {"whatsapp": body.whatsapp_consent}
+        if body.whatsapp_consent:
+            consents["evidence"] = {"whatsapp": {"source": body.consent_source, "recorded_by": _actor(p),
+                                                 "at": now.isoformat()}}
+        with tenant_tx(p.tenant_id, s.engine) as c:
+            if body.reference and c.execute(text("SELECT 1 FROM billing.customers WHERE external_ref=:r"),
+                                            {"r": body.reference}).first():
+                raise HTTPException(409, "a customer with this reference already exists")
+            cid = create_customer(c, p.tenant_id, NewCustomer(body.reference or new_id("ref"), body.name.strip(),
+                                                              body.phone, body.email, body.language,
+                                                              consents=consents))
+            AuditChain(SqlAuditStore(c), FixedClock(now)).append(
+                p.tenant_id, _actor(p), "customer.created", {"customer_id": cid,
+                                                             "whatsapp_consent": body.whatsapp_consent})
+        return {"customer_id": cid}
+
+    @app.post("/v1/customers/import")
+    def customers_import(body: ImportIn, p: Principal = Depends(require(Permission.CUSTOMERS_WRITE)),
+                         s: Services = Depends(services)) -> dict[str, Any]:
+        """CSV import: dry run first (per-row problems, nothing written), then the real run (valid rows, one
+        transaction). Enrolling needs subscriptions:write as well."""
+        from nirantar.billing.importer import ImportError_, parse, run
+
+        now = datetime.now(UTC)
+        try:
+            enrolls = any(r.plan for r in parse(body.csv))
+        except ImportError_ as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if enrolls and not body.dry_run and not p.can(Permission.SUBSCRIPTIONS_WRITE):
+            raise HTTPException(403, "enrolling customers on plans needs subscriptions:write")
+        try:
+            with tenant_tx(p.tenant_id, s.engine) as c:
+                out = run(c, p.tenant_id, body.csv, actor=_actor(p), now=now, dry_run=body.dry_run)
+                if not body.dry_run and out.get("created"):
+                    AuditChain(SqlAuditStore(c), FixedClock(now)).append(
+                        p.tenant_id, _actor(p), "customers.imported",
+                        {k: out[k] for k in ("created", "enrolled", "invalid")})
+        except ImportError_ as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return out
+
+    @app.post("/v1/subscriptions")
+    def subscriptions_enroll(body: EnrollIn, p: Principal = Depends(require(Permission.SUBSCRIPTIONS_WRITE)),
+                             s: Services = Depends(services)) -> dict[str, Any]:
+        """Put a customer on a plan. The first debit is created at once when it falls due within 3 days; its workflow
+        sends the payment link on the due date (pay-by-link) and verifies the payment with the provider."""
+        from datetime import date as _date
+
+        from nirantar.billing.plans import PlanError, enroll
+
+        now = datetime.now(UTC)
+        try:
+            with tenant_tx(p.tenant_id, s.engine) as c:
+                out = enroll(c, p.tenant_id, body.customer_id, body.plan_id, _date.fromisoformat(body.start_on), now)
+                AuditChain(SqlAuditStore(c), FixedClock(now)).append(
+                    p.tenant_id, _actor(p), "subscription.enrolled", {"subscription_id": out["subscription_id"],
+                                                                      "plan_id": body.plan_id})
+        except (PlanError, ValueError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return out
+
+    @app.post("/v1/subscriptions/{subscription_id}/cancel")
+    def subscriptions_cancel(subscription_id: str, p: Principal = Depends(require(Permission.SUBSCRIPTIONS_WRITE)),
+                             s: Services = Depends(services)) -> dict[str, Any]:
+        from nirantar.billing.plans import PlanError, cancel
+
+        now = datetime.now(UTC)
+        try:
+            with tenant_tx(p.tenant_id, s.engine) as c:
+                n = cancel(c, subscription_id, now)
+                AuditChain(SqlAuditStore(c), FixedClock(now)).append(
+                    p.tenant_id, _actor(p), "subscription.cancelled", {"subscription_id": subscription_id})
+        except PlanError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"subscription_id": subscription_id, "status": "cancelled", "debits_cancelled": n}
+
+    @app.post("/v1/debits/{debit_id}/payment-request")
+    def debit_payment_request(debit_id: str, p: Principal = Depends(require(Permission.SUBSCRIPTIONS_WRITE)),
+                              s: Services = Depends(services)) -> dict[str, Any]:
+        """Send (or re-send) the payment link for a debit now, through the gateway as the billing agent."""
+        gw: ToolGateway = s.extra.get("billing_gateway") or approval_executor(s).gateway(p.tenant_id, "billing_agent")
+        r = gw.call(tenant_id=p.tenant_id, agent_id="billing_agent", tool_name="billing.send_payment_request",
+                    args={"debit_id": debit_id}, idempotency_key=new_id("prq"))
+        if r.status != "executed":
+            why = [h.message for h in r.decision.hits] if r.decision else []
+            raise HTTPException(409, {"status": r.status, "reason": r.error or r.output.get("error") or "; ".join(why)
+                                      or r.status})
+        return {"url": r.output["url"], "sent": r.output["sent"], "channel_error": r.output.get("channel_error"),
+                "text": r.output.get("text")}
+
+    @app.post("/v1/payments/check")
+    def payments_check(p: Principal = Depends(require(Permission.SUBSCRIPTIONS_WRITE)),
+                       s: Services = Depends(services)) -> dict[str, Any]:
+        """Ask the provider about every open payment link now (the same check the workflows run every 30 minutes)."""
+        from nirantar.payments.providers.resolver import provider_for
+        from nirantar.payments.reconciliation import reconcile_payment_requests
+
+        provider = s.extra.get("provider_override") or provider_for(approval_executor(s).provider, p.tenant_id)
+        r = reconcile_payment_requests(s.engine, provider, p.tenant_id)
+        return {"scanned": r.scanned, "changed": r.changed, "events": r.events, "errors": r.errors[:5]}
+
+    # ------------------------------------------------------------- public pay page (no sign-in: the token is the key)
+    def _pay_provider(s: Services, token: str) -> Any:
+        from nirantar.billing.checkout import parse_token
+        from nirantar.payments.providers.resolver import provider_for
+
+        override = s.extra.get("provider_override")
+        return override if override is not None else provider_for(approval_executor(s).provider, parse_token(token)[0])
+
+    @app.get("/v1/public/pay/{token}")
+    def pay_view(token: str, s: Services = Depends(services)) -> dict[str, Any]:
+        from nirantar.billing.checkout import PayError, view
+
+        try:
+            provider = _pay_provider(s, token)
+            return view(s.engine, token, getattr(provider, "checkout_key", None))
+        except PayError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.post("/v1/public/pay/{token}/confirm")
+    def pay_confirm(token: str, body: CheckoutConfirmIn, s: Services = Depends(services)) -> dict[str, Any]:
+        from nirantar.billing.checkout import PayError, confirm
+
+        try:
+            return confirm(s.engine, _pay_provider(s, token), token, order_id=body.razorpay_order_id,
+                           payment_id=body.razorpay_payment_id, signature=body.razorpay_signature,
+                           now=datetime.now(UTC))
+        except PayError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    # ---------------------------------------------------------------- payment health (P10, ADR-0024)
+    # ---------------------------------------------------------------- B2B receivables (P10, ADR-0025)
+    @app.post("/v1/invoices")
+    def invoices_create(body: InvoiceIn, p: Principal = Depends(require(Permission.SUBSCRIPTIONS_WRITE)),
+                        s: Services = Depends(services)) -> dict[str, Any]:
+        """Issue an invoice: booked as a receivable now; its reminder ladder starts from the event it emits."""
+        from datetime import date as _date
+        from decimal import Decimal
+
+        from nirantar.core.money import Money
+        from nirantar.receivables.service import InvoiceError, create_invoice
+
+        now = datetime.now(UTC)
+        amount = Money.of(str(Decimal(str(body.amount_rupees)).quantize(Decimal("0.01"))))
+        try:
+            with tenant_tx(p.tenant_id, s.engine) as c:
+                iid = create_invoice(c, p.tenant_id, customer_id=body.customer_id, number=body.number, amount=amount,
+                                     issued_on=_date.fromisoformat(body.issued_on),
+                                     due_on=_date.fromisoformat(body.due_on), description=body.description,
+                                     actor=_actor(p), now=now)
+                AuditChain(SqlAuditStore(c), FixedClock(now)).append(
+                    p.tenant_id, _actor(p), "invoice.issued", {"invoice_id": iid, "amount_minor": amount.minor})
+        except (InvoiceError, ValueError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"invoice_id": iid}
+
+    @app.get("/v1/invoices")
+    def invoices_list(status: str | None = Query(None, pattern=r"^(open|partially_paid|paid|disputed|written_off)$"),
+                      c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        from nirantar.receivables.service import ageing
+
+        rows = [dict(r) for r in c.execute(text(
+            "SELECT i.invoice_id, i.number, i.customer_id, cu.display_name, i.issued_on, i.due_on, i.amount_minor, "
+            "i.paid_minor, i.status, i.updated_at, (SELECT step FROM ops.invoice_chases x WHERE "
+            "x.tenant_id=i.tenant_id AND x.invoice_id=i.invoice_id ORDER BY created_at DESC LIMIT 1) AS last_step "
+            "FROM billing.invoices i JOIN billing.customers cu ON cu.tenant_id=i.tenant_id AND "
+            "cu.customer_id=i.customer_id WHERE (CAST(:s AS text) IS NULL OR i.status = :s) "
+            "ORDER BY i.due_on ASC LIMIT 500"), {"s": status}).mappings()]
+        for r in rows:
+            for k in ("issued_on", "due_on", "updated_at"):
+                r[k] = r[k].isoformat()
+        return {"items": rows, "ageing": ageing(c, datetime.now(UTC).date())}
+
+    @app.get("/v1/invoices/{invoice_id}")
+    def invoice_detail(invoice_id: str, c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        inv = c.execute(text("SELECT i.*, cu.display_name FROM billing.invoices i JOIN billing.customers cu ON "
+                             "cu.tenant_id=i.tenant_id AND cu.customer_id=i.customer_id WHERE i.invoice_id=:i"),
+                        {"i": invoice_id}).mappings().one_or_none()
+        if inv is None:
+            raise HTTPException(404, "invoice not found")
+        chases = [dict(r) for r in c.execute(text(
+            "SELECT step, status, action_id, detail, created_at FROM ops.invoice_chases WHERE invoice_id=:i "
+            "ORDER BY created_at"), {"i": invoice_id}).mappings()]
+        payments = [dict(r) for r in c.execute(text(
+            "SELECT provider_payment_id, amount_minor, status, method, created_at FROM billing.payments WHERE "
+            "invoice_id=:i ORDER BY created_at"), {"i": invoice_id}).mappings()]
+        requests = [dict(r) for r in c.execute(text(
+            "SELECT request_id, url, amount_minor, status, created_at, paid_at FROM billing.payment_requests WHERE "
+            "invoice_id=:i ORDER BY created_at DESC"), {"i": invoice_id}).mappings()]
+        from nirantar.receivables.service import ladder_dates
+
+        return {"invoice": dict(inv), "ladder": [{"step": st, "on": d.isoformat()} for st, d in
+                                                 ladder_dates(inv["due_on"])],
+                "chases": chases, "payments": payments, "requests": requests}
+
+    @app.post("/v1/invoices/{invoice_id}/send")
+    def invoice_send(invoice_id: str, p: Principal = Depends(require(Permission.SUBSCRIPTIONS_WRITE)),
+                     s: Services = Depends(services)) -> dict[str, Any]:
+        gw: ToolGateway = s.extra.get("receivables_gateway") or approval_executor(s).gateway(p.tenant_id,
+                                                                                            "receivables_agent")
+        r = gw.call(tenant_id=p.tenant_id, agent_id="receivables_agent", tool_name="billing.send_invoice_request",
+                    args={"invoice_id": invoice_id, "step": "manual"}, idempotency_key=new_id("ivs"))
+        if r.status != "executed":
+            why = [h.message for h in r.decision.hits] if r.decision else []
+            raise HTTPException(409, {"status": r.status, "reason": r.error or r.output.get("error") or "; ".join(why)
+                                      or r.status})
+        return {"url": r.output["url"], "sent": r.output["sent"], "owed_minor": r.output["owed_minor"],
+                "channel_error": r.output.get("channel_error")}
+
+    def _invoice_status(p: Principal, s: Services, invoice_id: str, status: str, reason: str | None) -> dict[str, Any]:
+        from nirantar.receivables.service import InvoiceError, set_status
+
+        now = datetime.now(UTC)
+        try:
+            with tenant_tx(p.tenant_id, s.engine) as c:
+                set_status(c, invoice_id, status, now, reason)
+                AuditChain(SqlAuditStore(c), FixedClock(now)).append(
+                    p.tenant_id, _actor(p), f"invoice.{status}", {"invoice_id": invoice_id, "reason": reason})
+        except InvoiceError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"invoice_id": invoice_id, "status": status}
+
+    @app.post("/v1/invoices/{invoice_id}/dispute")
+    def invoice_dispute(invoice_id: str, body: InvoiceStatusIn,
+                        p: Principal = Depends(require(Permission.SUBSCRIPTIONS_WRITE)),
+                        s: Services = Depends(services)) -> dict[str, Any]:
+        """The customer disputes the invoice: chasing stops at the ladder's next check, until it is resolved."""
+        return _invoice_status(p, s, invoice_id, "disputed", body.reason or "disputed by the customer")
+
+    @app.post("/v1/invoices/{invoice_id}/resolve")
+    def invoice_resolve(invoice_id: str, p: Principal = Depends(require(Permission.SUBSCRIPTIONS_WRITE)),
+                        s: Services = Depends(services)) -> dict[str, Any]:
+        return _invoice_status(p, s, invoice_id, "open", None)
+
+    @app.post("/v1/invoices/{invoice_id}/write-off")
+    def invoice_write_off(invoice_id: str, body: InvoiceStatusIn,
+                          p: Principal = Depends(require(Permission.APPROVALS_DECIDE)),
+                          s: Services = Depends(services)) -> dict[str, Any]:
+        """Writing money off is a finance decision (approver role), and it is audited with the reason."""
+        if not (body.reason or "").strip():
+            raise HTTPException(422, "a reason is required to write off an invoice")
+        return _invoice_status(p, s, invoice_id, "written_off", body.reason)
+
+    # ---------------------------------------------------------------- live voice (P11, ADR-0026)
+    def _voice_speech() -> Any:
+        injected = s_root.extra.get("voice_speech")
+        if injected is not None:
+            return injected
+        from nirantar.voice.providers import SarvamSpeech
+
+        return SarvamSpeech()
+
+    def _voice_action(ctx: dict[str, Any], action: str) -> None:
+        """The caller promised: send the payment link on WhatsApp right away (they asked for it)."""
+        if action != "send_link" or not ctx.get("debit_id"):
+            return
+        gw: ToolGateway = s_root.extra.get("billing_gateway") or approval_executor(s_root).gateway(
+            ctx["tenant_id"], "billing_agent")
+        gw.call(tenant_id=ctx["tenant_id"], agent_id="billing_agent", tool_name="billing.send_payment_request",
+                args={"debit_id": ctx["debit_id"], "occasion": "promise"},
+                idempotency_key=f"voice-link:{ctx['call_id']}")
+
+    def _voice_finish(ctx: dict[str, Any], record: Any, intent: str | None) -> None:
+        from nirantar.voice import calls
+
+        calls.finish(s_root.engine, ctx, record.turns, intent, datetime.now(UTC))
+
+    if os.environ.get("SARVAM_API_KEY") or s_root.extra.get("voice_speech") is not None:
+        from nirantar.voice import calls as _calls
+        from nirantar.voice.gateway import build_app as _voice_gateway
+
+        _voice_gateway(_voice_speech, _voice_action,
+                       context_for=lambda token: _calls.context(s_root.engine, token),
+                       on_finish=_voice_finish, app=app)
+
+    @app.post("/webhooks/exotel/{tenant_id}")
+    async def exotel_status(tenant_id: str, request: Request) -> dict[str, Any]:
+        """Exotel call status (terminal events). Unsigned by Exotel, so it can only move a call WE placed in this
+        business to a terminal status — it never creates calls or touches money."""
+        from nirantar.voice.exotel import STATUS
+
+        try:
+            body = await request.json()
+        except ValueError:
+            form = await request.form()
+            body = dict(form)
+        sid = str(body.get("CallSid") or "")
+        status = STATUS.get(str(body.get("Status") or "").lower())
+        if not sid or status is None or not tenant_id.startswith("ten_"):
+            raise HTTPException(400, "unrecognised callback")
+        duration = body.get("ConversationDuration") or body.get("Duration")
+        with tenant_tx(tenant_id, s_root.engine) as c:
+            n = c.execute(text(
+                "UPDATE comms.calls SET status=:s, duration_s=coalesce(:d, duration_s), ended_at=coalesce(ended_at, "
+                "now()) WHERE tenant_id=:t AND provider='exotel' AND call_sid=:sid AND status NOT IN "
+                "('completed','no_answer','busy','failed','canceled')"),
+                {"s": status, "d": int(duration) if str(duration or "").isdigit() else None, "t": tenant_id,
+                 "sid": sid}).rowcount
+        return {"updated": n}
+
+    @app.get("/v1/today")
+    def today_view(c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        return queries.today(c, datetime.now(UTC))
+
+    @app.get("/v1/payment-health")
+    def payment_health(days: int = Query(30, ge=1, le=90), c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        """Issuer incidents across the platform (aggregates only) and what they meant for THIS business: debits
+        failed by the bank, the honest retry message sent after recovery, and the money that came back."""
+        since = datetime.now(UTC) - timedelta(days=days)
+        incidents = [dict(r) for r in c.execute(text(
+            "SELECT incident_id, rail, issuer, started_at, detected_at, ended_at, status, baseline_rate, peak_rate, "
+            "attempts, failures, detector, recovery_done FROM core.payment_incidents WHERE started_at >= :s "
+            "ORDER BY started_at DESC LIMIT 100"), {"s": since}).mappings()]
+        mine = {r.incident_id: r for r in c.execute(text(
+            "SELECT x.incident_id, count(*) AS affected, count(*) FILTER (WHERE x.status='executed') AS contacted, "
+            "count(*) FILTER (WHERE d.status='succeeded') AS recovered, coalesce(sum(d.amount_minor) FILTER (WHERE "
+            "d.status='succeeded'), 0) AS recovered_minor FROM ops.incident_recoveries x JOIN billing.debits d ON "
+            "d.tenant_id=x.tenant_id AND d.debit_id=x.debit_id GROUP BY x.incident_id"))}
+        for inc in incidents:
+            m = mine.get(inc["incident_id"])
+            inc["yours"] = {"affected": m.affected, "contacted": m.contacted, "recovered": m.recovered,
+                            "recovered_minor": int(m.recovered_minor)} if m else None
+            for k in ("started_at", "detected_at", "ended_at"):
+                inc[k] = inc[k].isoformat() if inc[k] else None
+        return {"incidents": incidents, "open": sum(i["status"] == "open" for i in incidents)}
 
     # ---------------------------------------------------------------- Recovery Command Centre (P8.5, ADR-0021)
     async def _temporal(s: Services) -> Any:

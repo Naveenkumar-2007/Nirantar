@@ -140,7 +140,14 @@ async def main() -> None:
     from nirantar.ml.router import ModelRouter
     from nirantar.payments.providers.resolver import ProviderResolver
     from nirantar.services.bridge import BridgeRunner, EventBridge, RedisSeen
-    from nirantar.services.worker import WorkerDeps, build_worker, ensure_mandate_schedule, ensure_sweep_schedule
+    from nirantar.services.worker import (
+        WorkerDeps,
+        build_worker,
+        ensure_billing_schedule,
+        ensure_health_schedule,
+        ensure_mandate_schedule,
+        ensure_sweep_schedule,
+    )
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -160,10 +167,16 @@ async def main() -> None:
     comms = default_comms(engine)
     llm = LLMGateway.from_env()
     client = await Client.connect(os.environ.get("TEMPORAL_ADDRESS", "localhost:7233"))
+    from sqlalchemy import create_engine as _create_engine
+
+    owner = _create_engine(os.environ.get(
+        "DATABASE_OWNER_URL", "postgresql+psycopg://nirantar_owner:nirantar_owner@localhost:25432/nirantar"),
+        pool_pre_ping=True)
     deps = WorkerDeps(engine, resolver, comms, llm if llm.providers else None, OnlineStore(), ModelRouter(),
-                      environment=env)
+                      environment=env, owner=owner)
     log.info("services_starting", environment=env, comms=type(comms).__name__,
-             reconciliation=await ensure_sweep_schedule(client), mandate_health=await ensure_mandate_schedule(client))
+             reconciliation=await ensure_sweep_schedule(client), mandate_health=await ensure_mandate_schedule(client),
+             billing=await ensure_billing_schedule(client), health=await ensure_health_schedule(client))
 
     svc = Services()
     bridge = EventBridge(engine, client, resolver)

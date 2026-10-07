@@ -65,7 +65,7 @@ def contact_request(conn: Connection, ctx: ToolContext, customer_id: str, action
     return ActionRequest(
         tenant_id=ctx.tenant_id, action_kind=action_kind, segment=cust.segment, now_utc=ctx.now,
         customer_timezone=cust.timezone, purpose=purpose,
-        consents={k: bool(v) for k, v in consents.items() if k != "opted_out"},
+        consents={k: v for k, v in consents.items() if isinstance(v, bool)},   # flags only, never evidence
         opted_out_channels=frozenset(consents.get("opted_out", [])),
         contacts_last_7d=_contacts_7d(conn, ctx.tenant_id, customer_id, ctx.now),
         message_text=message_text, mandatory_kind=mandatory_kind,
@@ -154,6 +154,8 @@ class ReplyIn(BaseModel):
     debit_id: str
     intent: str
     promised_date: str | None = None
+    quote: str | None = Field(default=None, max_length=300)        # the customer's words (already OTP-redacted)
+    source: str = Field(default="whatsapp_text", pattern=r"^(whatsapp_text|voice_note|operator)$")
 
 
 # ---------------------------------------------------------------- handlers
@@ -189,6 +191,12 @@ def h_create_link(ctx: ToolContext, a: BaseModel) -> dict[str, Any]:
         amount=Money(d.amount_minor, d.currency), reference_id=f"{d.debit_id}.{a.attempt}",
         description=f"Payment for {d.scheduled_for:%d %b %Y}", customer_name=None, customer_phone=None,
         customer_email=None, expire_by=ctx.now + timedelta(days=7)))
+    with tenant_tx(ctx.tenant_id, ctx.services["engine"]) as c:     # every link for a debit is tracked and polled
+        c.execute(text("INSERT INTO billing.payment_requests (tenant_id, request_id, debit_id, customer_id, provider, "
+                       "provider_link_id, url, amount_minor, status, created_at) VALUES (:t, :r, :d, :c, :p, :l, :u, "
+                       ":a, 'created', :n) ON CONFLICT (tenant_id, provider, provider_link_id) DO NOTHING"),
+                  {"t": ctx.tenant_id, "r": new_id("prq"), "d": d.debit_id, "c": d.customer_id, "p": provider.name,
+                   "l": link.link_id, "u": link.url, "a": link.amount.minor, "n": ctx.now})
     return {"provider_ref": link.link_id, "url": link.url, "amount_minor": link.amount.minor,
             "reference_id": link.reference_id}
 
@@ -283,7 +291,17 @@ def h_record_reply(ctx: ToolContext, a: BaseModel) -> dict[str, Any]:
                   {"t": ctx.tenant_id, "m": mem_id, "s": a.customer_id,
                    "v": json.dumps({"intent": a.intent, "promised_date": a.promised_date, "debit_id": a.debit_id}),
                    "conf": 0.8, "p": json.dumps({"agent": ctx.agent_id, "case_id": ctx.case_id})})
-    return {"memory_id": mem_id}
+        promise_id = None
+        if a.intent == "promise_to_pay":            # promise tracker (P10): the newest promise supersedes older ones
+            c.execute(text("UPDATE ops.promises SET status='superseded', resolved_at=:n WHERE tenant_id=:t AND "
+                           "debit_id=:d AND status='open'"), {"n": ctx.now, "t": ctx.tenant_id, "d": a.debit_id})
+            promise_id = new_id("prm")
+            c.execute(text("INSERT INTO ops.promises (tenant_id, promise_id, debit_id, customer_id, promised_date, "
+                           "source, quote, status, created_at) VALUES (:t, :p, :d, :c, :pd, :s, :q, 'open', :n)"),
+                      {"t": ctx.tenant_id, "p": promise_id, "d": a.debit_id, "c": a.customer_id,
+                       "pd": a.promised_date[:10] if a.promised_date else None, "s": a.source,
+                       "q": (a.quote or "")[:300] or None, "n": ctx.now})
+    return {"memory_id": mem_id, "promise_id": promise_id}
 
 
 class AckIn(BaseModel):
@@ -332,6 +350,341 @@ def p_acknowledge(c: Connection, ctx: ToolContext, a: BaseModel) -> ActionReques
     assert isinstance(a, AckIn)
     kind = "optout_confirmation" if a.intent == "opt_out" else "reply_acknowledgement"
     return contact_request(c, ctx, a.customer_id, "send_whatsapp", "service", mandatory_kind=kind)
+
+
+# ---------------------------------------------------------------- pay-by-link collection (P8.6, ADR-0022)
+class PaymentRequestIn(BaseModel):
+    debit_id: str
+    occasion: str = Field(default="due", pattern=r"^(due|promise|incident)$")   # due date / promised day / outage
+
+
+def h_payment_request(ctx: ToolContext, a: BaseModel) -> dict[str, Any]:
+    """Collect a debit by payment link: reuse the open link for this debit or create one (amount from the debit),
+    record it, and send the due-date message in the customer's language. If no messaging channel is connected the
+    link still exists and is returned, so the business can share it; the result says the message was not sent."""
+    assert isinstance(a, PaymentRequestIn)
+    from nirantar.comms.sink import ChannelNotConnected
+
+    engine = ctx.services["engine"]
+    with tenant_tx(ctx.tenant_id, engine) as c:
+        d = _debit(c, ctx.tenant_id, a.debit_id)
+        if d.status in ("succeeded", "cancelled"):
+            raise ValueError(f"debit is {d.status}; refusing to request payment")
+        cust = _customer(c, ctx.tenant_id, d.customer_id)
+        plan: str = c.execute(text(
+            "SELECT coalesce(p.name, 'subscription') FROM billing.debits x JOIN billing.subscriptions s ON "
+            "s.tenant_id=x.tenant_id AND s.subscription_id=x.subscription_id LEFT JOIN billing.plans p ON "
+            "p.tenant_id=s.tenant_id AND p.plan_id=s.plan_id WHERE x.tenant_id=:t AND x.debit_id=:d"),
+            {"t": ctx.tenant_id, "d": a.debit_id}).scalar_one()
+        open_req = c.execute(text(
+            "SELECT request_id, provider_link_id, url FROM billing.payment_requests WHERE tenant_id=:t AND "
+            "debit_id=:d AND status IN ('created','sent') ORDER BY created_at DESC LIMIT 1"),
+            {"t": ctx.tenant_id, "d": a.debit_id}).first()
+        n = int(c.execute(text("SELECT count(*) FROM billing.payment_requests WHERE tenant_id=:t AND debit_id=:d"),
+                          {"t": ctx.tenant_id, "d": a.debit_id}).scalar_one())
+        lang = cust.preferred_language or "en"
+        key = {"promise": "whatsapp.promise_reminder", "incident": "whatsapp.bank_issue_retry"}.get(
+            a.occasion, "whatsapp.payment_due")
+        tpl = templates.resolve(c, ctx.tenant_id, key, lang)
+    due = Money(d.amount_minor, d.currency)
+    if open_req is not None:
+        request_id, link_id, url = open_req.request_id, open_req.provider_link_id, open_req.url
+    else:
+        from nirantar.billing import checkout
+
+        provider: PaymentProvider = ctx.services["provider"]
+        request_id = new_id("prq")
+        if checkout.supports_checkout(provider):
+            # Nirantar pay page backed by a provider order: branded, no link quota, signature-confirmed
+            order = provider.create_order(due, f"{d.debit_id}.c{n + 1}",       # type: ignore[attr-defined]
+                                          {"nirantar_ref": d.debit_id, "request_id": request_id})
+            kind, link_id = "checkout", order.order_id
+            url = f"{checkout.public_base()}/pay/{checkout.token_for(ctx.tenant_id, request_id)}"
+        else:
+            link = provider.create_payment_link(LinkRequest(
+                amount=due, reference_id=f"{d.debit_id}.p{n + 1}",
+                description=f"{plan} - due {d.scheduled_for:%d %b %Y}", customer_name=None, customer_phone=None,
+                customer_email=None, expire_by=ctx.now + timedelta(days=14)))
+            kind, link_id, url = "link", link.link_id, link.url
+        with tenant_tx(ctx.tenant_id, engine) as c:
+            c.execute(text("INSERT INTO billing.payment_requests (tenant_id, request_id, debit_id, customer_id, "
+                           "provider, provider_link_id, url, amount_minor, status, created_at, kind) VALUES (:t, :r, "
+                           ":d, :c, :p, :l, :u, :a, 'created', :n, :k) ON CONFLICT (tenant_id, provider, "
+                           "provider_link_id) DO NOTHING"),
+                      {"t": ctx.tenant_id, "r": request_id, "d": d.debit_id, "c": d.customer_id, "p": provider.name,
+                       "l": link_id, "u": url, "a": due.minor, "n": ctx.now, "k": kind})
+    values = {"name": first_name(cust.display_name), "plan": plan, "amount": rupees(due),
+              "date": f"{d.scheduled_for:%d %b %Y}", "link": url}
+    body = tpl.render(**values)
+    mid, error = None, None
+    try:
+        mid = ctx.services["comms"].send("whatsapp", d.customer_id, body, ctx.now, tenant_id=ctx.tenant_id,
+                                         template=OutboundTemplate(key, lang, values))
+    except ChannelNotConnected as exc:
+        error = str(exc)[:200]
+    with tenant_tx(ctx.tenant_id, engine) as c:
+        if mid is not None:
+            c.execute(text("UPDATE billing.payment_requests SET status='sent', sent_at=:n, channel_message_id=:m "
+                           "WHERE tenant_id=:t AND request_id=:r AND status='created'"),
+                      {"n": ctx.now, "m": mid, "t": ctx.tenant_id, "r": request_id})
+            c.execute(text("INSERT INTO ops.contacts (tenant_id, contact_id, customer_id, channel, purpose, status, "
+                           "at) VALUES (:t, :i, :c, 'whatsapp', 'service', 'accepted', :n)"),
+                      {"t": ctx.tenant_id, "i": new_id("cnt"), "c": d.customer_id, "n": ctx.now})
+    return {"provider_ref": link_id, "request_id": request_id, "url": url, "sent": mid is not None,
+            "message_id": mid, "channel_error": error, "text": body, "template_ref": tpl.ref}
+
+
+def p_payment_request(c: Connection, ctx: ToolContext, a: BaseModel) -> ActionRequest:
+    """A bill the customer signed up for is a service message: consent, contact window, opt-out and fatigue apply.
+    On the day the customer themselves promised, the reminder is customer-requested: no fatigue budget."""
+    assert isinstance(a, PaymentRequestIn)
+    d = _debit(c, ctx.tenant_id, a.debit_id)
+    req = contact_request(c, ctx, d.customer_id, "send_whatsapp", "service")
+    if a.occasion == "promise":
+        return ActionRequest(**{**req.__dict__, "customer_requested": True})
+    return req
+
+
+def h_receipt(ctx: ToolContext, a: BaseModel) -> dict[str, Any]:
+    """Post-debit notification: only for a debit the verifier settled, with the provider's payment reference."""
+    assert isinstance(a, PaymentRequestIn)
+    with tenant_tx(ctx.tenant_id, ctx.services["engine"]) as c:
+        d = _debit(c, ctx.tenant_id, a.debit_id)
+        if d.status != "succeeded" or not d.provider_payment_id:
+            raise ValueError("no verified payment for this debit; refusing to send a receipt")
+        cust = _customer(c, ctx.tenant_id, d.customer_id)
+        plan: str = c.execute(text(
+            "SELECT coalesce(p.name, 'subscription') FROM billing.debits x JOIN billing.subscriptions s ON "
+            "s.tenant_id=x.tenant_id AND s.subscription_id=x.subscription_id LEFT JOIN billing.plans p ON "
+            "p.tenant_id=s.tenant_id AND p.plan_id=s.plan_id WHERE x.tenant_id=:t AND x.debit_id=:d"),
+            {"t": ctx.tenant_id, "d": a.debit_id}).scalar_one()
+        lang = cust.preferred_language or "en"
+        tpl = templates.resolve(c, ctx.tenant_id, "whatsapp.payment_receipt", lang)
+    values = {"name": first_name(cust.display_name), "amount": rupees(Money(d.amount_minor, d.currency)),
+              "plan": plan, "date": f"{ctx.now:%d %b %Y}", "ref": str(d.provider_payment_id)}
+    body = tpl.render(**values)
+    mid = ctx.services["comms"].send("whatsapp", d.customer_id, body, ctx.now, tenant_id=ctx.tenant_id,
+                                     template=OutboundTemplate("whatsapp.payment_receipt", lang, values))
+    with tenant_tx(ctx.tenant_id, ctx.services["engine"]) as c:
+        c.execute(text("INSERT INTO ops.contacts (tenant_id, contact_id, customer_id, channel, purpose, status, "
+                       "at) VALUES (:t, :i, :c, 'whatsapp', 'mandatory', 'accepted', :n)"),
+                  {"t": ctx.tenant_id, "i": new_id("cnt"), "c": d.customer_id, "n": ctx.now})
+    return {"provider_ref": mid, "text": body, "template_ref": tpl.ref}
+
+
+def p_receipt(c: Connection, ctx: ToolContext, a: BaseModel) -> ActionRequest:
+    assert isinstance(a, PaymentRequestIn)
+    d = _debit(c, ctx.tenant_id, a.debit_id)
+    return contact_request(c, ctx, d.customer_id, "send_whatsapp", "mandatory", mandatory_kind="postdebit_notice")
+
+
+# ---------------------------------------------------------------- B2B receivables (P10, ADR-0025)
+class InvoiceStepIn(BaseModel):
+    invoice_id: str = Field(pattern=r"^ivc_[0-9A-Z]{26}$")
+    step: str = Field(pattern=r"^(reminder|due|overdue_1|overdue_2|final|manual)$")
+
+
+_INVOICE_TEMPLATE = {"reminder": "whatsapp.invoice_reminder", "due": "whatsapp.invoice_reminder",
+                     "manual": "whatsapp.invoice_reminder", "overdue_1": "whatsapp.invoice_overdue",
+                     "overdue_2": "whatsapp.invoice_overdue", "final": "whatsapp.invoice_final"}
+
+
+def h_invoice_request(ctx: ToolContext, a: BaseModel) -> dict[str, Any]:
+    """Ask for the OUTSTANDING amount of an invoice: reuse its open link / pay page or create one, record it, send the
+    step's message in the customer's language. Channel unavailable → the link still exists and is returned."""
+    assert isinstance(a, InvoiceStepIn)
+    from nirantar.billing import checkout
+    from nirantar.comms.sink import ChannelNotConnected
+
+    engine = ctx.services["engine"]
+    with tenant_tx(ctx.tenant_id, engine) as c:
+        inv = c.execute(text("SELECT i.*, t.name AS business FROM billing.invoices i JOIN core.tenants t ON "
+                             "t.tenant_id=i.tenant_id WHERE i.tenant_id=:t AND i.invoice_id=:i"),
+                        {"t": ctx.tenant_id, "i": a.invoice_id}).one()
+        if inv.status not in ("open", "partially_paid"):
+            raise ValueError(f"invoice is {inv.status}; refusing to request payment")
+        cust = _customer(c, ctx.tenant_id, inv.customer_id)
+        owed = Money(int(inv.amount_minor) - int(inv.paid_minor), inv.currency)
+        open_req = c.execute(text(
+            "SELECT request_id, provider_link_id, url FROM billing.payment_requests WHERE tenant_id=:t AND "
+            "invoice_id=:i AND status IN ('created','sent') AND amount_minor=:a ORDER BY created_at DESC LIMIT 1"),
+            {"t": ctx.tenant_id, "i": a.invoice_id, "a": owed.minor}).first()
+        n = int(c.execute(text("SELECT count(*) FROM billing.payment_requests WHERE tenant_id=:t AND invoice_id=:i"),
+                          {"t": ctx.tenant_id, "i": a.invoice_id}).scalar_one())
+        lang = cust.preferred_language or "en"
+        tpl = templates.resolve(c, ctx.tenant_id, _INVOICE_TEMPLATE[a.step], lang)
+    if open_req is not None:
+        request_id, url = open_req.request_id, open_req.url
+    else:
+        provider: PaymentProvider = ctx.services["provider"]
+        request_id = new_id("prq")
+        if checkout.supports_checkout(provider):
+            order = provider.create_order(owed, f"{a.invoice_id}.{n + 1}",          # type: ignore[attr-defined]
+                                          {"nirantar_ref": a.invoice_id, "request_id": request_id})
+            kind, link_id = "checkout", order.order_id
+            url = f"{checkout.public_base()}/pay/{checkout.token_for(ctx.tenant_id, request_id)}"
+        else:
+            link = provider.create_payment_link(LinkRequest(
+                amount=owed, reference_id=f"{a.invoice_id}.{n + 1}", description=f"Invoice {inv.number}",
+                customer_name=None, customer_phone=None, customer_email=None, expire_by=ctx.now + timedelta(days=30)))
+            kind, link_id, url = "link", link.link_id, link.url
+        with tenant_tx(ctx.tenant_id, engine) as c:
+            c.execute(text("INSERT INTO billing.payment_requests (tenant_id, request_id, invoice_id, customer_id, "
+                           "provider, provider_link_id, url, amount_minor, status, created_at, kind) VALUES (:t, :r, "
+                           ":i, :c, :p, :l, :u, :a, 'created', :n, :k) ON CONFLICT (tenant_id, provider, "
+                           "provider_link_id) DO NOTHING"),
+                      {"t": ctx.tenant_id, "r": request_id, "i": a.invoice_id, "c": inv.customer_id,
+                       "p": provider.name, "l": link_id, "u": url, "a": owed.minor, "n": ctx.now, "k": kind})
+    values = {"name": first_name(cust.display_name), "business": inv.business, "number": inv.number,
+              "amount": rupees(owed), "date": f"{inv.due_on:%d %b %Y}",
+              "deadline": f"{ctx.now + timedelta(days=7):%d %b %Y}", "link": url}
+    body = tpl.render(**values)
+    mid, error = None, None
+    try:
+        mid = ctx.services["comms"].send("whatsapp", inv.customer_id, body, ctx.now, tenant_id=ctx.tenant_id,
+                                         template=OutboundTemplate(_INVOICE_TEMPLATE[a.step], lang, values))
+    except ChannelNotConnected as exc:
+        error = str(exc)[:200]
+    if mid is not None:
+        with tenant_tx(ctx.tenant_id, engine) as c:
+            c.execute(text("UPDATE billing.payment_requests SET status='sent', sent_at=:n, channel_message_id=:m "
+                           "WHERE tenant_id=:t AND request_id=:r AND status='created'"),
+                      {"n": ctx.now, "m": mid, "t": ctx.tenant_id, "r": request_id})
+            c.execute(text("INSERT INTO ops.contacts (tenant_id, contact_id, customer_id, channel, purpose, status, "
+                           "at) VALUES (:t, :i, :c, 'whatsapp', 'service', 'accepted', :n)"),
+                      {"t": ctx.tenant_id, "i": new_id("cnt"), "c": inv.customer_id, "n": ctx.now})
+    return {"provider_ref": mid, "request_id": request_id, "url": url, "sent": mid is not None, "text": body,
+            "channel_error": error, "template_ref": tpl.ref, "owed_minor": owed.minor}
+
+
+def p_invoice_request(c: Connection, ctx: ToolContext, a: BaseModel) -> ActionRequest:
+    """An invoice for goods/services delivered is a service message: consent, window, opt-out and fatigue apply."""
+    assert isinstance(a, InvoiceStepIn)
+    cust: str = c.execute(text("SELECT customer_id FROM billing.invoices WHERE tenant_id=:t AND invoice_id=:i"),
+                     {"t": ctx.tenant_id, "i": a.invoice_id}).scalar_one()
+    return contact_request(c, ctx, cust, "send_whatsapp", "service")
+
+
+# ---------------------------------------------------------------- live voice (P11, ADR-0026)
+class CallIn(BaseModel):
+    customer_id: str
+    debit_id: str
+
+
+def h_place_call(ctx: ToolContext, a: BaseModel) -> dict[str, Any]:
+    """Place an outbound recovery call through Exotel. The call carries only a signed token; the voice gateway says
+    the recording disclosure first and resolves the business, amount and language server-side."""
+    assert isinstance(a, CallIn)
+    import os
+
+    from nirantar.core import crypto
+    from nirantar.voice import calls
+
+    exotel = ctx.services.get("voice")
+    if exotel is None:
+        raise ValueError("voice calls are not configured for this deployment (Exotel)")
+    with tenant_tx(ctx.tenant_id, ctx.services["engine"]) as c:
+        cust = c.execute(text("SELECT phone_enc, preferred_language FROM billing.customers WHERE customer_id=:c"),
+                         {"c": a.customer_id}).one()
+    if cust.phone_enc is None:
+        raise ValueError("customer has no phone number on file")
+    phone = crypto.decrypt(bytes(cust.phone_enc), ctx.tenant_id)
+    call_id = calls.create(ctx.services["engine"], ctx.tenant_id, a.customer_id, a.debit_id,
+                           cust.preferred_language or "en", ctx.now)
+    base = os.environ.get("NIRANTAR_PUBLIC_APP_URL", "").rstrip("/")
+    callback = f"{base}/webhooks/exotel/{ctx.tenant_id}" if base else None
+    placed = exotel.place_call(phone, calls.token_for(ctx.tenant_id, call_id), callback)
+    calls.set_status(ctx.services["engine"], ctx.tenant_id, call_id, placed.status, call_sid=placed.call_sid,
+                     now=ctx.now)
+    with tenant_tx(ctx.tenant_id, ctx.services["engine"]) as c:
+        c.execute(text("INSERT INTO ops.contacts (tenant_id, contact_id, customer_id, channel, purpose, status, at) "
+                       "VALUES (:t, :i, :c, 'voice', 'recovery', 'accepted', :n)"),
+                  {"t": ctx.tenant_id, "i": new_id("cnt"), "c": a.customer_id, "n": ctx.now})
+    return {"provider_ref": placed.call_sid, "call_id": call_id, "status": placed.status}
+
+
+def p_place_call(c: Connection, ctx: ToolContext, a: BaseModel) -> ActionRequest:
+    """Voice: voice consent, opt-out, contact window, fatigue, and a registered calling header (TRAI)."""
+    assert isinstance(a, CallIn)
+    return contact_request(c, ctx, a.customer_id, "voice_call", "recovery")
+
+
+class StatementIn(BaseModel):
+    customer_id: str = Field(pattern=r"^cus_[0-9A-Z]{26}$")
+
+
+def h_invoice_statement(ctx: ToolContext, a: BaseModel) -> dict[str, Any]:
+    """One message for all of a customer's open invoices, with one link for the total owed; a payment is allocated
+    oldest-due-first. Reuses an open statement for the same invoices and amount."""
+    assert isinstance(a, StatementIn)
+    from nirantar.billing import checkout
+    from nirantar.comms.sink import ChannelNotConnected
+
+    engine = ctx.services["engine"]
+    with tenant_tx(ctx.tenant_id, engine) as c:
+        invs = c.execute(text("SELECT invoice_id, number, due_on, amount_minor - paid_minor AS owed FROM "
+                              "billing.invoices WHERE tenant_id=:t AND customer_id=:c AND status IN "
+                              "('open','partially_paid') ORDER BY due_on, number"),
+                         {"t": ctx.tenant_id, "c": a.customer_id}).all()
+        if not invs:
+            raise ValueError("no open invoices for this customer")
+        ids = [r.invoice_id for r in invs]
+        owed = Money(sum(int(r.owed) for r in invs), "INR")
+        business: str = c.execute(text("SELECT name FROM core.tenants WHERE tenant_id=:t"),
+                             {"t": ctx.tenant_id}).scalar_one()
+        cust = _customer(c, ctx.tenant_id, a.customer_id)
+        open_req = c.execute(text(
+            "SELECT request_id, url FROM billing.payment_requests WHERE tenant_id=:t AND invoice_ids @> :ids AND "
+            "invoice_ids <@ :ids AND amount_minor=:a AND status IN ('created','sent') ORDER BY created_at DESC "
+            "LIMIT 1"), {"t": ctx.tenant_id, "ids": ids, "a": owed.minor}).first()
+        lang = cust.preferred_language or "en"
+        tpl = templates.resolve(c, ctx.tenant_id, "whatsapp.invoice_statement", lang)
+    if open_req is not None:
+        request_id, url = open_req.request_id, open_req.url
+    else:
+        provider: PaymentProvider = ctx.services["provider"]
+        request_id = new_id("prq")
+        if checkout.supports_checkout(provider):
+            order = provider.create_order(owed, request_id,                       # type: ignore[attr-defined]
+                                          {"nirantar_ref": request_id})
+            kind, link_id = "checkout", order.order_id
+            url = f"{checkout.public_base()}/pay/{checkout.token_for(ctx.tenant_id, request_id)}"
+        else:
+            link = provider.create_payment_link(LinkRequest(
+                amount=owed, reference_id=request_id, description=f"Statement: {len(ids)} invoices",
+                customer_name=None, customer_phone=None, customer_email=None, expire_by=ctx.now + timedelta(days=30)))
+            kind, link_id, url = "link", link.link_id, link.url
+        with tenant_tx(ctx.tenant_id, engine) as c:
+            c.execute(text("INSERT INTO billing.payment_requests (tenant_id, request_id, invoice_ids, customer_id, "
+                           "provider, provider_link_id, url, amount_minor, status, created_at, kind) VALUES (:t, :r, "
+                           ":ids, :c, :p, :l, :u, :a, 'created', :n, :k)"),
+                      {"t": ctx.tenant_id, "r": request_id, "ids": ids, "c": a.customer_id, "p": provider.name,
+                       "l": link_id, "u": url, "a": owed.minor, "n": ctx.now, "k": kind})
+    listing = "; ".join(f"{r.number} {rupees(Money(int(r.owed), 'INR'))} (due {r.due_on:%d %b})" for r in invs)
+    values = {"name": first_name(cust.display_name), "business": business, "count": str(len(ids)),
+              "amount": rupees(owed), "list": listing, "link": url}
+    body = tpl.render(**values)
+    mid, error = None, None
+    try:
+        mid = ctx.services["comms"].send("whatsapp", a.customer_id, body, ctx.now, tenant_id=ctx.tenant_id,
+                                         template=OutboundTemplate("whatsapp.invoice_statement", lang, values))
+    except ChannelNotConnected as exc:
+        error = str(exc)[:200]
+    if mid is not None:
+        with tenant_tx(ctx.tenant_id, engine) as c:
+            c.execute(text("UPDATE billing.payment_requests SET status='sent', sent_at=:n, channel_message_id=:m "
+                           "WHERE tenant_id=:t AND request_id=:r AND status='created'"),
+                      {"n": ctx.now, "m": mid, "t": ctx.tenant_id, "r": request_id})
+            c.execute(text("INSERT INTO ops.contacts (tenant_id, contact_id, customer_id, channel, purpose, status, "
+                           "at) VALUES (:t, :i, :c, 'whatsapp', 'service', 'accepted', :n)"),
+                      {"t": ctx.tenant_id, "i": new_id("cnt"), "c": a.customer_id, "n": ctx.now})
+    return {"provider_ref": mid, "request_id": request_id, "url": url, "sent": mid is not None, "text": body,
+            "invoices": ids, "owed_minor": owed.minor, "channel_error": error}
+
+
+def p_invoice_statement(c: Connection, ctx: ToolContext, a: BaseModel) -> ActionRequest:
+    assert isinstance(a, StatementIn)
+    return contact_request(c, ctx, a.customer_id, "send_whatsapp", "service")
 
 
 # ---------------------------------------------------------------- human takeover (P8.5, ADR-0021)
@@ -743,6 +1096,21 @@ TOOLS: dict[str, Tool] = {t.name: t for t in (
          "inside the pause (customer-delegated).", PauseIn, h_request_pause, "write", policy=p_customer_request),
     Tool("treasury.request_credit_draw", "Request a credit-line draw to cover a projected shortfall (always human-"
          "approved).", CreditDrawIn, h_credit_draw, "money", approval="always"),
+    Tool("billing.send_payment_request", "Collect a due debit by payment link: create (or reuse) the link and send "
+         "the due-date message in the customer's language.", PaymentRequestIn, h_payment_request, "money",
+         policy=p_payment_request),
+    Tool("comms.send_receipt", "Send the payment receipt (post-debit notification) for a verified payment.",
+         PaymentRequestIn, h_receipt, "write", policy=p_receipt),
+    Tool("billing.send_invoice_request", "Ask a business customer to pay the outstanding amount of an invoice "
+         "(reminder, due date, polite overdue follow-up).", InvoiceStepIn, h_invoice_request, "money",
+         policy=p_invoice_request),
+    Tool("billing.send_invoice_statement", "One message for all of a business customer's open invoices with one "
+         "'pay all' link (allocated oldest-due-first).", StatementIn, h_invoice_statement, "money",
+         policy=p_invoice_statement),
+    Tool("billing.send_final_notice", "Send the final notice for an overdue invoice (always approved by a person).",
+         InvoiceStepIn, h_invoice_request, "money", policy=p_invoice_request, approval="always"),
+    Tool("comms.place_call", "Place an outbound recovery call (Exotel, the customer's language; recording disclosed "
+         "first).", CallIn, h_place_call, "write", policy=p_place_call),
     Tool("comms.operator_reply", "A person's reply to the customer inside the WhatsApp service window.",
          OperatorReplyIn, h_operator_reply, "write", idempotent=False, policy=p_operator_reply),
 )}
@@ -752,6 +1120,7 @@ AGENT_SCOPES: dict[str, frozenset[str]] = {
                             "experiment.log_exposure", "case.record_reply", "comms.acknowledge_reply"}),
     "debit_strategist": frozenset({"comms.send_predebit_notice", "customer.get_profile"}),
     "conversation_agent": frozenset({"comms.send_whatsapp", "gateway.create_payment_link", "customer.get_profile",
+                                     "comms.place_call",
                                      "content.get_template"}),
     "verifier": frozenset({"ledger.verify_credit"}),
     "treasury_agent": frozenset({"treasury.request_credit_draw"}),
@@ -761,6 +1130,11 @@ AGENT_SCOPES: dict[str, frozenset[str]] = {
                                 "comms.send_winback", "experiment.assign_treatment", "experiment.log_exposure"}),
     # an operator-launched recovery batch (P8.5): the same tools the agents use, never more
     "recovery_batch": frozenset({"gateway.create_payment_link", "comms.send_whatsapp", "mandate.send_repair",
-                                 "comms.send_predebit_notice", "customer.get_profile"}),
+                                 "comms.send_predebit_notice", "customer.get_profile",
+                                 "billing.send_payment_request"}),
     "human_operator": frozenset({"comms.operator_reply"}),
+    "receivables_agent": frozenset({"billing.send_invoice_request", "billing.send_final_notice",
+                                    "billing.send_invoice_statement",
+                                    "customer.get_profile"}),
+    "billing_agent": frozenset({"billing.send_payment_request", "comms.send_receipt", "customer.get_profile"}),
 }

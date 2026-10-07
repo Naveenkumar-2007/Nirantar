@@ -1,0 +1,605 @@
+{
+  "events": [
+    {
+      "eventId": "1",
+      "eventTime": "2026-10-07T12:40:23.460Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+      "workflowExecutionStartedEventAttributes": {
+        "workflowType": {
+          "name": "PaymentHealthWorkflow"
+        },
+        "taskQueue": {
+          "name": "payment-health-test"
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJ0ZW5hbnRzIjpbInRlbl8wMU00QjYxUDM0MloxMjY1WU45SFJNMFNZQSIsInRlbl8wMU00QjYxWFZYUzBTOUdINjdKTTcyQ1ZHRSJdfQ=="
+            }
+          ]
+        },
+        "workflowExecutionTimeout": "315360000s",
+        "workflowRunTimeout": "315360000s",
+        "workflowTaskTimeout": "10s",
+        "originalExecutionRunId": "a49459ae-f665-4cc0-acef-4152f3294902",
+        "identity": "8804@Naveen",
+        "firstExecutionRunId": "a49459ae-f665-4cc0-acef-4152f3294902",
+        "attempt": 1,
+        "firstWorkflowTaskBackoff": "0s",
+        "priority": {}
+      }
+    },
+    {
+      "eventId": "2",
+      "eventTime": "2026-10-07T12:40:23.460Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "payment-health-test"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "3",
+      "eventTime": "2026-10-07T12:40:23.465Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "2",
+        "identity": "8804@Naveen",
+        "historySizeBytes": "346"
+      }
+    },
+    {
+      "eventId": "4",
+      "eventTime": "2026-10-07T12:40:23.737Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "2",
+        "identity": "8804@Naveen",
+        "binaryChecksum": "8f4015e5b68f5045ae5294959649ec6a",
+        "sdkMetadata": {
+          "coreUsedFlags": [
+            2,
+            1,
+            3
+          ],
+          "sdkName": "temporal-python",
+          "sdkVersion": "1.33.0"
+        },
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "5",
+      "eventTime": "2026-10-07T12:40:23.737Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "1",
+        "activityType": {
+          "name": "health_scan"
+        },
+        "taskQueue": {
+          "name": "payment-health-test",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {},
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJpbmNpZGVudF9pZCI6IiIsIm5vd19pc28iOiIyMDI2LTEwLTA3VDEyOjQwOjIzLjQ2NTAwMCswMDowMCIsInRlbmFudF9pZCI6IiIsInRlbmFudHMiOlsidGVuXzAxTTRCNjFQMzQyWjEyNjVZTjlIUk0wU1lBIiwidGVuXzAxTTRCNjFYVlhTMFM5R0g2N0pNNzJDVkdFIl19"
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "315360000s",
+        "scheduleToStartTimeout": "315360000s",
+        "startToCloseTimeout": "300s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "3",
+        "retryPolicy": {
+          "initialInterval": "5s",
+          "backoffCoefficient": 2.0,
+          "maximumInterval": "500s",
+          "maximumAttempts": 5
+        },
+        "priority": {}
+      }
+    },
+    {
+      "eventId": "6",
+      "eventTime": "2026-10-07T12:40:23.737Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "5",
+        "identity": "8804@Naveen",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "7",
+      "eventTime": "2026-10-07T12:40:23.766Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "activityTaskCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJjbG9zZWQiOlt7ImluY2lkZW50X2lkIjoiaW5jXzAxTTRCNjIyNjM0TjQxNU1GTUQxRjQ1RTdZIiwiaXNzdWVyIjoiVEVTVEJBTks2NDA5MyIsInJhaWwiOiJ1cGkifV0sIm9wZW5lZCI6W10sInNlcmllcyI6MX0="
+            }
+          ]
+        },
+        "scheduledEventId": "5",
+        "startedEventId": "6",
+        "identity": "8804@Naveen"
+      }
+    },
+    {
+      "eventId": "8",
+      "eventTime": "2026-10-07T12:40:23.766Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "payment-health-test"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "9",
+      "eventTime": "2026-10-07T12:40:23.766Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "8",
+        "identity": "8804@Naveen",
+        "historySizeBytes": "1071"
+      }
+    },
+    {
+      "eventId": "10",
+      "eventTime": "2026-10-07T12:40:23.769Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "8",
+        "identity": "8804@Naveen",
+        "binaryChecksum": "8f4015e5b68f5045ae5294959649ec6a",
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "11",
+      "eventTime": "2026-10-07T12:40:23.769Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "2",
+        "activityType": {
+          "name": "health_pending_recoveries"
+        },
+        "taskQueue": {
+          "name": "payment-health-test",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {},
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJpbmNpZGVudF9pZCI6IiIsIm5vd19pc28iOiIyMDI2LTEwLTA3VDEyOjQwOjIzLjQ2NTAwMCswMDowMCIsInRlbmFudF9pZCI6IiIsInRlbmFudHMiOltdfQ=="
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "315360000s",
+        "scheduleToStartTimeout": "315360000s",
+        "startToCloseTimeout": "300s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "9",
+        "retryPolicy": {
+          "initialInterval": "5s",
+          "backoffCoefficient": 2.0,
+          "maximumInterval": "500s",
+          "maximumAttempts": 5
+        },
+        "priority": {}
+      }
+    },
+    {
+      "eventId": "12",
+      "eventTime": "2026-10-07T12:40:23.769Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "11",
+        "identity": "8804@Naveen",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "13",
+      "eventTime": "2026-10-07T12:40:23.776Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "activityTaskCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "WyJpbmNfMDFNNEI2MjI2MzRONDE1TUZNRDFGNDVFN1kiXQ=="
+            }
+          ]
+        },
+        "scheduledEventId": "11",
+        "startedEventId": "12",
+        "identity": "8804@Naveen"
+      }
+    },
+    {
+      "eventId": "14",
+      "eventTime": "2026-10-07T12:40:23.776Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "payment-health-test"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "15",
+      "eventTime": "2026-10-07T12:40:23.776Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "14",
+        "identity": "8804@Naveen",
+        "historySizeBytes": "1621"
+      }
+    },
+    {
+      "eventId": "16",
+      "eventTime": "2026-10-07T12:40:23.779Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "14",
+        "identity": "8804@Naveen",
+        "binaryChecksum": "8f4015e5b68f5045ae5294959649ec6a",
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "17",
+      "eventTime": "2026-10-07T12:40:23.779Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "3",
+        "activityType": {
+          "name": "health_recover"
+        },
+        "taskQueue": {
+          "name": "payment-health-test",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {},
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJpbmNpZGVudF9pZCI6ImluY18wMU00QjYyMjYzNE40MTVNRk1EMUY0NUU3WSIsIm5vd19pc28iOiIyMDI2LTEwLTA3VDEyOjQwOjIzLjc3NjAwMCswMDowMCIsInRlbmFudF9pZCI6InRlbl8wMU00QjYxUDM0MloxMjY1WU45SFJNMFNZQSIsInRlbmFudHMiOltdfQ=="
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "315360000s",
+        "scheduleToStartTimeout": "315360000s",
+        "startToCloseTimeout": "300s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "15",
+        "retryPolicy": {
+          "initialInterval": "5s",
+          "backoffCoefficient": 2.0,
+          "maximumInterval": "500s",
+          "maximumAttempts": 5
+        },
+        "priority": {}
+      }
+    },
+    {
+      "eventId": "18",
+      "eventTime": "2026-10-07T12:40:23.779Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "17",
+        "identity": "8804@Naveen",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "19",
+      "eventTime": "2026-10-07T12:40:24.041Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "activityTaskCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJhZmZlY3RlZCI6Mywic2VudCI6M30="
+            }
+          ]
+        },
+        "scheduledEventId": "17",
+        "startedEventId": "18",
+        "identity": "8804@Naveen"
+      }
+    },
+    {
+      "eventId": "20",
+      "eventTime": "2026-10-07T12:40:24.041Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "payment-health-test"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "21",
+      "eventTime": "2026-10-07T12:40:24.041Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "20",
+        "identity": "8804@Naveen",
+        "historySizeBytes": "2210"
+      }
+    },
+    {
+      "eventId": "22",
+      "eventTime": "2026-10-07T12:40:24.044Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "20",
+        "identity": "8804@Naveen",
+        "binaryChecksum": "8f4015e5b68f5045ae5294959649ec6a",
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "23",
+      "eventTime": "2026-10-07T12:40:24.044Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "4",
+        "activityType": {
+          "name": "health_recover"
+        },
+        "taskQueue": {
+          "name": "payment-health-test",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {},
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJpbmNpZGVudF9pZCI6ImluY18wMU00QjYyMjYzNE40MTVNRk1EMUY0NUU3WSIsIm5vd19pc28iOiIyMDI2LTEwLTA3VDEyOjQwOjI0LjA0MTAwMCswMDowMCIsInRlbmFudF9pZCI6InRlbl8wMU00QjYxWFZYUzBTOUdINjdKTTcyQ1ZHRSIsInRlbmFudHMiOltdfQ=="
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "315360000s",
+        "scheduleToStartTimeout": "315360000s",
+        "startToCloseTimeout": "300s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "21",
+        "retryPolicy": {
+          "initialInterval": "5s",
+          "backoffCoefficient": 2.0,
+          "maximumInterval": "500s",
+          "maximumAttempts": 5
+        },
+        "priority": {}
+      }
+    },
+    {
+      "eventId": "24",
+      "eventTime": "2026-10-07T12:40:24.044Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "23",
+        "identity": "8804@Naveen",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "25",
+      "eventTime": "2026-10-07T12:40:24.052Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "activityTaskCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJhZmZlY3RlZCI6MCwic2VudCI6MH0="
+            }
+          ]
+        },
+        "scheduledEventId": "23",
+        "startedEventId": "24",
+        "identity": "8804@Naveen"
+      }
+    },
+    {
+      "eventId": "26",
+      "eventTime": "2026-10-07T12:40:24.052Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "payment-health-test"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "27",
+      "eventTime": "2026-10-07T12:40:24.052Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "26",
+        "identity": "8804@Naveen",
+        "historySizeBytes": "2795"
+      }
+    },
+    {
+      "eventId": "28",
+      "eventTime": "2026-10-07T12:40:24.056Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "26",
+        "identity": "8804@Naveen",
+        "binaryChecksum": "8f4015e5b68f5045ae5294959649ec6a",
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "29",
+      "eventTime": "2026-10-07T12:40:24.056Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "5",
+        "activityType": {
+          "name": "health_mark_recovered"
+        },
+        "taskQueue": {
+          "name": "payment-health-test",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {},
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJpbmNpZGVudF9pZCI6ImluY18wMU00QjYyMjYzNE40MTVNRk1EMUY0NUU3WSIsIm5vd19pc28iOiIyMDI2LTEwLTA3VDEyOjQwOjIzLjQ2NTAwMCswMDowMCIsInRlbmFudF9pZCI6IiIsInRlbmFudHMiOltdfQ=="
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "315360000s",
+        "scheduleToStartTimeout": "315360000s",
+        "startToCloseTimeout": "300s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "27",
+        "retryPolicy": {
+          "initialInterval": "5s",
+          "backoffCoefficient": 2.0,
+          "maximumInterval": "500s",
+          "maximumAttempts": 5
+        },
+        "priority": {}
+      }
+    },
+    {
+      "eventId": "30",
+      "eventTime": "2026-10-07T12:40:24.056Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "29",
+        "identity": "8804@Naveen",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "31",
+      "eventTime": "2026-10-07T12:40:24.062Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "activityTaskCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "YmluYXJ5L251bGw="
+              }
+            }
+          ]
+        },
+        "scheduledEventId": "29",
+        "startedEventId": "30",
+        "identity": "8804@Naveen"
+      }
+    },
+    {
+      "eventId": "32",
+      "eventTime": "2026-10-07T12:40:24.062Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "payment-health-test"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "33",
+      "eventTime": "2026-10-07T12:40:24.062Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "32",
+        "identity": "8804@Naveen",
+        "historySizeBytes": "3332"
+      }
+    },
+    {
+      "eventId": "34",
+      "eventTime": "2026-10-07T12:40:24.066Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "32",
+        "identity": "8804@Naveen",
+        "binaryChecksum": "8f4015e5b68f5045ae5294959649ec6a",
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "35",
+      "eventTime": "2026-10-07T12:40:24.066Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED",
+      "workflowExecutionCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJjbG9zZWQiOjEsIm1lc3NhZ2VzIjozLCJvcGVuZWQiOjB9"
+            }
+          ]
+        },
+        "workflowTaskCompletedEventId": "33"
+      }
+    }
+  ]
+}

@@ -171,9 +171,16 @@ def customer_360(conn: Connection, tenant_id: str, customer_id: str) -> dict[str
         return None
     return {
         "customer": c[0],
-        "subscriptions": _rows(conn, "SELECT subscription_id, provider, status, amount_minor, currency, interval, "
-                                     "next_charge_on, mandate_id, created_at FROM billing.subscriptions WHERE "
-                                     "customer_id=:c ORDER BY created_at DESC", c=customer_id),
+        "subscriptions": _rows(conn, "SELECT s.subscription_id, s.provider, s.status, s.amount_minor, s.currency, "
+                                     "s.interval, s.next_charge_on, s.mandate_id, s.created_at, s.collection_method, "
+                                     "s.plan_id, p.name AS plan_name FROM billing.subscriptions s "
+                                     "LEFT JOIN billing.plans "
+                                     "p ON p.tenant_id=s.tenant_id AND p.plan_id=s.plan_id WHERE s.customer_id=:c "
+                                     "ORDER BY s.created_at DESC", c=customer_id),
+        "payment_requests": _rows(conn, "SELECT request_id, debit_id, url, amount_minor, status, created_at, sent_at, "
+                                        "paid_at FROM billing.payment_requests WHERE customer_id=:c "
+                                        "ORDER BY created_at "
+                                        "DESC LIMIT 20", c=customer_id),
         "mandates": _rows(conn, "SELECT mandate_id, rail, status, max_amount_minor, valid_until, failure_reason, "
                                 "last_verified_at FROM billing.mandates WHERE customer_id=:c ORDER BY created_at DESC",
                           c=customer_id),
@@ -188,6 +195,9 @@ def customer_360(conn: Connection, tenant_id: str, customer_id: str) -> dict[str
                                "FROM ops.actions a WHERE a.params->>'customer_id' = :c OR a.case_id IN (SELECT case_id "
                                "FROM ops.cases WHERE customer_id=:c) ORDER BY a.created_at DESC LIMIT 30",
                          c=customer_id),
+        "promises": _rows(conn, "SELECT promise_id, debit_id, promised_date, source, quote, status, reminder_sent_at, "
+                                "created_at, resolved_at FROM ops.promises WHERE customer_id=:c ORDER BY created_at "
+                                "DESC LIMIT 20", c=customer_id),
         "replies": _rows(conn, "SELECT value->>'intent' AS intent, value->>'promised_date' AS promised_date, "
                                "created_at FROM ai.memory WHERE subject_id=:c AND key='customer_reply' "
                                "ORDER BY created_at DESC LIMIT 10", c=customer_id),
@@ -216,3 +226,42 @@ def thread(conn: Connection, tenant_id: str, customer_id: str) -> list[dict[str,
         blob = r.pop("body_enc", None)
         r["text"] = crypto.decrypt(bytes(blob), tenant_id) if blob else None
     return rows
+
+
+def today(conn: Connection, now: datetime, tz: str = "Asia/Kolkata") -> dict[str, Any]:
+    """The owner's day in one call: money in, money due, money stuck, promises, outages and decisions waiting.
+    "Today" is the business's calendar day (IST by default), not UTC."""
+    from zoneinfo import ZoneInfo
+
+    local = now.astimezone(ZoneInfo(tz))
+    day_start = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    d0 = day_start.date()
+
+    def one(sql: str, **p: Any) -> Any:
+        return conn.execute(text(sql), p).one()
+
+    collected = one("SELECT count(*) AS n, coalesce(sum(amount_minor),0) AS minor FROM billing.payments WHERE "
+                    "status='captured' AND coalesce(provider_created_at, created_at) >= :s", s=day_start)
+    due = {label: one("SELECT count(*) AS n, coalesce(sum(amount_minor),0) AS minor FROM billing.debits WHERE "
+                      "scheduled_for=:d AND status IN ('scheduled','notified','attempting')", d=d)
+           for label, d in (("today", d0), ("tomorrow", d0 + timedelta(days=1)))}
+    overdue = one("SELECT count(*) AS n, coalesce(sum(amount_minor),0) AS minor FROM billing.debits WHERE "
+                  "status='failed' OR (status IN ('scheduled','notified','attempting') AND scheduled_for < :d)", d=d0)
+    promises_today = one("SELECT count(*) AS n FROM ops.promises WHERE status='open' AND promised_date=:d", d=d0)
+    broken_week = one("SELECT count(*) AS n FROM ops.promises WHERE status='broken' AND resolved_at >= :s",
+                      s=day_start - timedelta(days=7))
+    approvals = one("SELECT count(*) AS n FROM ops.approvals WHERE status='pending'")
+    incidents = one("SELECT count(*) AS n FROM core.payment_incidents WHERE status='open'")
+    recovered_week = one("SELECT count(*) AS n, coalesce(sum(value_minor),0) AS minor FROM experiments.outcomes "
+                         "WHERE verified AND outcome='recovered' AND value_minor > 0 AND observed_at >= :s",
+                         s=day_start - timedelta(days=7))
+    return {
+        "date": d0.isoformat(), "timezone": tz,
+        "collected_today": {"n": collected.n, "minor": int(collected.minor)},
+        "due_today": {"n": due["today"].n, "minor": int(due["today"].minor)},
+        "due_tomorrow": {"n": due["tomorrow"].n, "minor": int(due["tomorrow"].minor)},
+        "overdue": {"n": overdue.n, "minor": int(overdue.minor)},
+        "recovered_7d": {"n": recovered_week.n, "minor": int(recovered_week.minor)},
+        "promises_due_today": promises_today.n, "promises_broken_7d": broken_week.n,
+        "approvals_waiting": approvals.n, "live_incidents": incidents.n,
+    }

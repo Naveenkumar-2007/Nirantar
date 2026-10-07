@@ -1,0 +1,180 @@
+# Nirantar production stack on one server (pilot scale): docker compose -f deploy/compose.prod.yml --env-file deploy/.env up -d
+# Only Caddy publishes ports (80/443). The API is private: the web server calls it on the internal network, and the
+# edge forwards only provider webhooks to it. Every secret comes from deploy/.env (never committed).
+name: nirantar-prod
+
+x-python: &python
+  image: nirantar-python:${NIRANTAR_VERSION:-latest}
+  build: { context: .., dockerfile: deploy/Dockerfile.python }
+  restart: unless-stopped
+  env_file: .env
+  environment: &pyenv
+    NIRANTAR_ENV: production
+    DATABASE_URL: postgresql+psycopg://nirantar_app:${APP_DB_PASSWORD}@postgres:5432/nirantar
+    RELAY_DATABASE_URL: postgresql+psycopg://nirantar_owner:${OWNER_DB_PASSWORD}@postgres:5432/nirantar
+    DATABASE_OWNER_URL: postgresql+psycopg://nirantar_owner:${OWNER_DB_PASSWORD}@postgres:5432/nirantar
+    REDIS_URL: redis://redis:6379/0
+    KAFKA_BOOTSTRAP: redpanda:9092
+    TEMPORAL_ADDRESS: temporal:7233
+    S3_ENDPOINT: http://objectstore:8333
+    NIRANTAR_S3_ENDPOINT: http://objectstore:8333
+    S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+    S3_SECRET_KEY: ${S3_SECRET_KEY}
+    NIRANTAR_S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+    NIRANTAR_S3_SECRET_KEY: ${S3_SECRET_KEY}
+    NIRANTAR_LAKE_CATALOG_URI: postgresql+psycopg://nirantar_owner:${OWNER_DB_PASSWORD}@postgres:5432/nirantar_lake
+    MLFLOW_TRACKING_URI: postgresql+psycopg://nirantar_owner:${OWNER_DB_PASSWORD}@postgres:5432/mlflow
+    NIRANTAR_PUBLIC_APP_URL: https://${NIRANTAR_DOMAIN}
+    NIRANTAR_PUBLIC_URL: https://${NIRANTAR_DOMAIN}
+    NIRANTAR_OIDC_ISSUER: https://auth.${NIRANTAR_DOMAIN}/realms/nirantar
+    CORS_ORIGINS: https://${NIRANTAR_DOMAIN}
+  depends_on:
+    migrate: { condition: service_completed_successfully }
+    redpanda: { condition: service_healthy }
+    redis: { condition: service_healthy }
+
+services:
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      NIRANTAR_DOMAIN: ${NIRANTAR_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [web, api, keycloak]
+
+  web:
+    image: nirantar-web:${NIRANTAR_VERSION:-latest}
+    build: { context: ../apps/web }
+    restart: unless-stopped
+    environment:
+      NIRANTAR_API_URL: http://api:8000
+      NIRANTAR_APP_URL: https://${NIRANTAR_DOMAIN}
+      NIRANTAR_OIDC_ISSUER: https://auth.${NIRANTAR_DOMAIN}/realms/nirantar
+      NIRANTAR_OIDC_CLIENT_ID: nirantar-dashboard
+      NIRANTAR_OIDC_CLIENT_SECRET: ${NIRANTAR_DASHBOARD_CLIENT_SECRET}
+      NIRANTAR_SESSION_SECRET: ${NIRANTAR_SESSION_SECRET}
+      NIRANTAR_MCP_URL: https://${NIRANTAR_DOMAIN}/mcp
+    depends_on: [api]
+
+  api:
+    <<: *python
+    command: ["uvicorn", "nirantar.api.serve:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers",
+              "--forwarded-allow-ips", "*"]
+
+  services:
+    <<: *python
+    command: ["python", "-m", "nirantar.services"]
+    healthcheck: { disable: true }
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      temporal: { condition: service_started }
+      redpanda: { condition: service_healthy }
+
+  migrate:
+    <<: *python
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    healthcheck: { disable: true }
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nirantar_owner
+      POSTGRES_PASSWORD: ${OWNER_DB_PASSWORD}
+      POSTGRES_DB: nirantar
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nirantar_owner -d nirantar"]
+      interval: 5s
+      retries: 30
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.0
+    restart: unless-stopped
+    command: ["start", "--import-realm", "--http-enabled=true", "--proxy-headers=xforwarded"]
+    depends_on: { postgres: { condition: service_healthy } }
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      KC_HOSTNAME: https://auth.${NIRANTAR_DOMAIN}
+      KC_HEALTH_ENABLED: "true"
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      NIRANTAR_DASHBOARD_URL: https://${NIRANTAR_DOMAIN}
+      NIRANTAR_DASHBOARD_CLIENT_SECRET: ${NIRANTAR_DASHBOARD_CLIENT_SECRET}
+      NIRANTAR_E2E_CLIENT_SECRET: disabled
+      NIRANTAR_E2E_CLIENT_ENABLED: "false"
+    volumes:
+      - ../infra/keycloak:/opt/keycloak/data/import:ro
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redisdata:/data]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, retries: 20 }
+
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    restart: unless-stopped
+    command: ["redpanda start", "--smp 1", "--memory 1G", "--overprovisioned", "--node-id 0",
+              "--kafka-addr internal://0.0.0.0:9092", "--advertise-kafka-addr internal://redpanda:9092"]
+    volumes: [redpandadata:/var/lib/redpanda/data]
+    healthcheck: { test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"], interval: 5s, retries: 30 }
+
+  temporal:
+    image: temporalio/auto-setup:1.25.2
+    restart: unless-stopped
+    depends_on: { postgres: { condition: service_healthy } }
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: nirantar_owner
+      POSTGRES_PWD: ${OWNER_DB_PASSWORD}
+      POSTGRES_SEEDS: postgres
+
+  objectstore:
+    image: chrislusf/seaweedfs:3.97
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/seaweed-entry.sh"]
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+    volumes:
+      - objdata:/data
+      - ./seaweed-entry.sh:/seaweed-entry.sh:ro
+
+  backup:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: ${OWNER_DB_PASSWORD}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    volumes:
+      - ./backup.sh:/backup.sh:ro
+      - backups:/backups
+    depends_on: { postgres: { condition: service_healthy } }
+
+volumes:
+  pgdata:
+  objdata:
+  redisdata:
+  redpandadata:
+  backups:
+  caddy_data:
+  caddy_config:

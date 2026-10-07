@@ -25,7 +25,10 @@ from nirantar.settings import templates as registry
 LANGS = {"en": "en", "hi": "hi", "te": "te"}           # registry language → Meta language code
 CLOSING = {"en": "Thank you.", "hi": "धन्यवाद।", "te": "ధన్యవాదాలు."}
 EXAMPLES = {"name": "Priya", "amount": "₹999.00", "plan": "Chai Club monthly", "date": "05 Oct 2026",
-            "link": "https://rzp.io/i/example", "offer": "Your restart comes with 10% off the first payment."}
+            "link": "https://rzp.io/i/example", "offer": "Your restart comes with 10% off the first payment.",
+            "ref": "pay_Q4xY7ExAmPlE", "business": "Chai Club", "number": "INV-2026-041",
+            "deadline": "12 Oct 2026", "count": "3",
+            "list": "INV-041 ₹4,000.00 (due 05 Oct); INV-044 ₹2,500.00 (due 10 Oct)"}
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,21 @@ class MetaTemplate:
 
 CATALOG = (
     MetaTemplate("whatsapp.recovery", "nirantar_payment_retry", "UTILITY", ("name", "amount", "plan", "link")),
+    MetaTemplate("whatsapp.payment_due", "nirantar_payment_due", "UTILITY", ("name", "plan", "amount", "date", "link")),
+    MetaTemplate("whatsapp.invoice_statement", "nirantar_invoice_statement", "UTILITY",
+                 ("name", "business", "count", "amount", "list", "link")),
+    MetaTemplate("whatsapp.invoice_reminder", "nirantar_invoice_reminder", "UTILITY",
+                 ("name", "business", "number", "amount", "date", "link")),
+    MetaTemplate("whatsapp.invoice_overdue", "nirantar_invoice_overdue", "UTILITY",
+                 ("name", "business", "number", "amount", "date", "link")),
+    MetaTemplate("whatsapp.invoice_final", "nirantar_invoice_final", "UTILITY",
+                 ("name", "business", "number", "amount", "deadline", "link")),
+    MetaTemplate("whatsapp.bank_issue_retry", "nirantar_bank_issue_retry", "UTILITY",
+                 ("name", "plan", "amount", "link")),
+    MetaTemplate("whatsapp.promise_reminder", "nirantar_promise_reminder", "UTILITY",
+                 ("name", "plan", "amount", "link")),
+    MetaTemplate("whatsapp.payment_receipt", "nirantar_payment_receipt", "UTILITY",
+                 ("name", "amount", "plan", "date", "ref")),
     MetaTemplate("whatsapp.predebit_notice", "nirantar_predebit_notice", "UTILITY", ("amount", "date", "plan")),
     MetaTemplate("whatsapp.mandate_reauth", "nirantar_autopay_renew", "UTILITY", ("name", "plan", "date", "link")),
     MetaTemplate("whatsapp.mandate_resume", "nirantar_autopay_resume", "UTILITY", ("name", "plan", "date")),

@@ -4,6 +4,8 @@ import { api } from "@/lib/api";
 import { day } from "@/lib/format";
 import { Badge, Card, Empty, PageHeader, Table, Td, Tr } from "@/components/kit";
 import { Button } from "@/components/ui/button";
+import { AddCustomer } from "./add-customer";
+import { ImportCustomers } from "./import-customers";
 
 type Customer = {
   customer_id: string; external_ref: string | null; display_name: string | null; preferred_language: string;
@@ -24,10 +26,11 @@ export default async function CustomersPage({ searchParams }: { searchParams: Pr
   return (
     <>
       <PageHeader eyebrow="Operate" title="Customers"
-        subtitle="Everyone with a subscription or EMI. Contact details stay encrypted — Nirantar shows only how each person can be reached." />
+        subtitle="Everyone with a subscription or EMI. Contact details stay encrypted — Nirantar shows only how each person can be reached."
+        right={<><ImportCustomers /><AddCustomer /></>} />
       <Card>
         {page.items.length === 0 ? (
-          <Empty icon={<Users />} title="No customers yet" hint="They arrive with your history import or the first payment." />
+          <Empty icon={<Users />} title="No customers yet" hint="Add your first customer, or import your history from your payment provider (Setup)." />
         ) : (
           <Table head={["Customer", "Reference", "Language", "Can be reached on", "Since", ""]}>
             {page.items.map((c) => (

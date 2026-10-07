@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
@@ -32,6 +32,8 @@ from nirantar.db.session import tenant_tx
 from nirantar.db.stores import SqlAuditStore
 from nirantar.policy.engine import ActionRequest, Decision, Outcome, TenantPolicyConfig, evaluate
 from nirantar.settings.service import policy_config as settings_policy_config
+
+EXECUTING_LEASE = timedelta(minutes=10)   # an 'executing' action older than this belongs to a crashed worker
 
 
 @dataclass(frozen=True)
@@ -63,7 +65,7 @@ class Tool:
 
 @dataclass(frozen=True)
 class ToolResult:
-    status: str                           # executed | denied | pending_approval | needs_info | failed | invalid
+    status: str                 # executed | denied | pending_approval | needs_info | in_progress | failed | invalid
     action_id: str | None
     output: dict[str, Any] = field(default_factory=dict)
     decision: Decision | None = None
@@ -140,14 +142,23 @@ class ToolGateway:
 
         # ---- phase 1: record intent + policy decision (one transaction)
         with tenant_tx(tenant_id, self.engine) as c:
+            # Concurrent calls with the same key (two workers, a retried activity) are serialised here, so at most
+            # one of them can ever reach the handler.
+            c.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:t || '/' || :k, 0))"),
+                      {"t": tenant_id, "k": key})
             existing = c.execute(
-                text("SELECT action_id, status, result, approval_id FROM ops.actions "
+                text("SELECT action_id, status, result, approval_id, updated_at FROM ops.actions "
                      "WHERE tenant_id=:t AND idempotency_key=:k"), {"t": tenant_id, "k": key}).one_or_none()
             # Executed actions are never repeated. Denials are NOT cached: they depend on time (contact windows),
             # consent and fatigue, so a retry re-evaluates policy on the same action row.
             if existing is not None and existing.status in ("executed", "verified"):
                 return ToolResult("executed", existing.action_id, dict(existing.result or {}),
                                   approval_id=existing.approval_id)
+            # Another caller holds this action mid-execution: never run it twice. A lease that outlived a crashed
+            # worker expires, and the action is then re-evaluated from scratch.
+            if (existing is not None and existing.status == "executing"
+                    and now - existing.updated_at < EXECUTING_LEASE):
+                return ToolResult("in_progress", existing.action_id, approval_id=existing.approval_id)
             action_id = existing.action_id if existing else new_id("act")
             decision: Decision | None = None
             if tool.policy is not None:
@@ -160,14 +171,17 @@ class ToolGateway:
                                     decision.policy_version if decision else "n/a")
             status = "proposed"
             approval_id = None
-            if decision is not None and decision.outcome == Outcome.DENY:
+            if decision is None or decision.outcome == Outcome.ALLOW:
+                status = "executing"
+            elif decision.outcome == Outcome.DENY:
                 status = "denied"
-            elif decision is not None and decision.outcome == Outcome.REQUIRE_MORE_INFORMATION:
+            elif decision.outcome == Outcome.REQUIRE_MORE_INFORMATION:
                 status = "proposed"
-            elif decision is not None and decision.outcome == Outcome.REQUIRE_APPROVAL:
+            elif decision.outcome == Outcome.REQUIRE_APPROVAL:
                 if approval_token:
                     try:
                         approval_id = redeem(c, approval_token, tenant_id, tool_name, params_hash, now)
+                        status = "executing"
                     except ApprovalError as exc:
                         return ToolResult("denied", action_id, decision=decision, error=f"approval: {exc}")
                 else:

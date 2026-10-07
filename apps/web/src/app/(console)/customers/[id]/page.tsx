@@ -5,13 +5,16 @@ import { api, ApiError } from "@/lib/api";
 import { day, inr, ist } from "@/lib/format";
 import { Badge, Card, Empty, Mono, PageHeader, Table, Td, Tr } from "@/components/kit";
 import { Button } from "@/components/ui/button";
+import { EnrollForm, PaymentLinks } from "./billing-panel";
 
 type C360 = {
   customer: { customer_id: string; external_ref: string | null; display_name: string | null; preferred_language: string;
     timezone: string; segment: string | null; consents: Record<string, unknown>; has_phone: boolean; has_email: boolean;
     created_at: string };
   subscriptions: { subscription_id: string; provider: string; status: string; amount_minor: number; interval: string | null;
-    next_charge_on: string | null; mandate_id: string | null }[];
+    next_charge_on: string | null; mandate_id: string | null; collection_method: string; plan_name: string | null }[];
+  payment_requests: { request_id: string; debit_id: string; url: string; amount_minor: number; status: string;
+    created_at: string; sent_at: string | null; paid_at: string | null }[];
   mandates: { mandate_id: string; rail: string; status: string; max_amount_minor: number | null; valid_until: string | null;
     failure_reason: string | null; last_verified_at: string | null }[];
   debits: { debit_id: string; scheduled_for: string; amount_minor: number; status: string; attempt_count: number;
@@ -20,6 +23,8 @@ type C360 = {
   contacts: { channel: string; purpose: string; status: string; at: string }[];
   actions: { action_id: string; agent_id: string; tool_name: string; status: string; policy_decision: string | null; created_at: string }[];
   replies: { intent: string; promised_date: string | null; created_at: string }[];
+  promises: { promise_id: string; debit_id: string; promised_date: string | null; source: string; quote: string | null;
+    status: string; reminder_sent_at: string | null; created_at: string; resolved_at: string | null }[];
 };
 
 function Fact({ icon, label, children }: { icon: React.ReactNode; label: string; children: React.ReactNode }) {
@@ -34,8 +39,10 @@ function Fact({ icon, label, children }: { icon: React.ReactNode; label: string;
 export default async function CustomerPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   let d: C360;
+  let plans: { items: { plan_id: string; name: string; amount_minor: number; interval: string; active: boolean }[] };
   try {
-    d = await api<C360>(`/v1/customers/${encodeURIComponent(id)}`);
+    [d, plans] = await Promise.all([api<C360>(`/v1/customers/${encodeURIComponent(id)}`),
+      api<{ items: { plan_id: string; name: string; amount_minor: number; interval: string; active: boolean }[] }>("/v1/plans")]);
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) notFound();
     throw e;
@@ -73,7 +80,7 @@ export default async function CustomerPage({ params }: { params: Promise<{ id: s
                   <div key={s.subscription_id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3">
                     <div>
                       <div className="flex items-center gap-2"><span className="font-medium">{inr(s.amount_minor)}</span>
-                        <span className="text-xs text-muted-foreground">/ {s.interval ?? "cycle"} · {s.provider}</span><Badge>{s.status}</Badge></div>
+                        <span className="text-xs text-muted-foreground">/ {s.interval ?? "cycle"} · {s.plan_name ?? s.provider} · {s.collection_method === "payment_link" ? "payment link" : s.collection_method.replace("_", " ")}</span><Badge>{s.status}</Badge></div>
                       <div className="mt-1 text-xs text-muted-foreground">
                         {s.next_charge_on ? `Next charge ${day(s.next_charge_on)}` : "No upcoming charge"}
                       </div>
@@ -89,6 +96,15 @@ export default async function CustomerPage({ params }: { params: Promise<{ id: s
               })}
             </div>
           )}
+        </Card>
+      </div>
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+        <Card title="Payments" description="Payment links Nirantar sent, and what is still due. Links are checked with your provider every 30 minutes.">
+          <PaymentLinks customerId={c.customer_id} requests={d.payment_requests} debits={d.debits} subs={d.subscriptions} />
+        </Card>
+        <Card title="Put on a plan" description="On every due date the customer gets a secure payment link on WhatsApp in their language.">
+          <EnrollForm customerId={c.customer_id} plans={plans.items} />
         </Card>
       </div>
 
@@ -124,7 +140,7 @@ export default async function CustomerPage({ params }: { params: Promise<{ id: s
         </Card>
       </div>
 
-      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+      <div className="mt-4 grid gap-4 xl:grid-cols-3">
         <Card title="Cases">
           {d.cases.length === 0 ? <Empty title="No cases" /> : (
             <Table head={["Kind", "Status", "Opened", "Outcome"]}>
@@ -133,6 +149,28 @@ export default async function CustomerPage({ params }: { params: Promise<{ id: s
                   <Td className="text-xs text-muted-foreground">{ist(x.opened_at)}</Td><Td>{x.outcome ?? "—"}</Td></Tr>
               ))}
             </Table>
+          )}
+        </Card>
+        <Card title="Promises" description={(() => {
+          const done = d.promises.filter((p) => p.status === "kept" || p.status === "broken");
+          const kept = done.filter((p) => p.status === "kept").length;
+          return done.length ? `Kept ${kept} of ${done.length} promises` : "Promises the customer made, in their own words";
+        })()}>
+          {d.promises.length === 0 ? <Empty title="No promises yet" /> : (
+            <ul className="space-y-3 text-sm">
+              {d.promises.map((p) => (
+                <li key={p.promise_id} className="rounded-lg border border-border p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span>{p.promised_date ? <>pay by <b>{day(p.promised_date)}</b></> : "no date given"}</span>
+                    <Badge tone={p.status === "kept" ? "good" : p.status === "broken" ? "bad" : p.status === "open" ? "info" : "neutral"}>{p.status}</Badge>
+                  </div>
+                  {p.quote && <p className="mt-1 italic text-muted-foreground">“{p.quote}”</p>}
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {p.source.replace("_", " ")} · {ist(p.created_at)}{p.reminder_sent_at ? ` · reminded ${ist(p.reminder_sent_at)}` : ""}
+                  </div>
+                </li>
+              ))}
+            </ul>
           )}
         </Card>
         <Card title="Contacts & replies">
