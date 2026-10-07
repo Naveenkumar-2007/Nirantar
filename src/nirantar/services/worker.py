@@ -24,6 +24,8 @@ from temporalio.worker import Worker
 from nirantar.workflows import TASK_QUEUE
 from nirantar.workflows.activities import DebitActivities, Deps
 from nirantar.workflows.billing import BillingActivities, BillingDeps, BillingSweepInput, BillingSweepWorkflow
+from nirantar.workflows.checkout import CheckoutRecoveryWorkflow
+from nirantar.workflows.checkout_activities import CheckoutActivities, CheckoutDeps
 from nirantar.workflows.debit_cycle import DebitCycleWorkflow
 from nirantar.workflows.dispute import DisputeWorkflow
 from nirantar.workflows.dispute_activities import DisputeActivities, DisputeDeps
@@ -41,7 +43,7 @@ from nirantar.workflows.revival_activities import RevivalActivities, RevivalDeps
 
 WORKFLOWS = [DebitCycleWorkflow, RevivalWorkflow, DisputeWorkflow, OnboardingWorkflow, ReconciliationSweepWorkflow,
              MandateSweepWorkflow, MandateRepairWorkflow, RecoveryBatchWorkflow, BillingSweepWorkflow,
-             PaymentHealthWorkflow, InvoiceChaseWorkflow]
+             PaymentHealthWorkflow, InvoiceChaseWorkflow, CheckoutRecoveryWorkflow]
 SWEEP_SCHEDULE_ID = "nirantar-reconciliation-sweep"
 MANDATE_SCHEDULE_ID = "nirantar-mandate-health"
 BILLING_SCHEDULE_ID = "nirantar-billing-sweep"
@@ -70,7 +72,8 @@ def activities(d: WorkerDeps) -> list[Any]:
             *RecoveryActivities(RecoveryDeps(d.engine, d.provider, d.comms, d.environment)).all(),
             *BillingActivities(BillingDeps(d.engine)).all(),
             *HealthActivities(HealthDeps(d.engine, d.owner or d.engine, d.provider, d.comms, d.environment)).all(),
-            *ReceivablesActivities(ReceivablesDeps(d.engine, d.provider, d.comms, d.environment)).all()]
+            *ReceivablesActivities(ReceivablesDeps(d.engine, d.provider, d.comms, d.environment)).all(),
+            *CheckoutActivities(CheckoutDeps(d.engine, d.provider, d.comms, d.environment)).all()]
 
 
 def build_worker(client: Client, d: WorkerDeps, task_queue: str = TASK_QUEUE, threads: int = 16) -> Worker:

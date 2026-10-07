@@ -239,7 +239,8 @@ def test_dead_letter_replay_republishes_the_original_event(demo: dict[str, Any],
 def test_customer_360_hides_contact_details_and_respects_tenancy(demo: dict[str, Any]) -> None:
     c: TestClient = demo["client"]
     key = h(demo["api_keys"]["viewer"])
-    cust = c.get("/v1/customers?limit=1", headers=key).json()["items"][0]
+    cust = next(x for x in c.get("/v1/customers?limit=100", headers=key).json()["items"]
+                if x["segment"] == "subscription")
     d = c.get(f"/v1/customers/{cust['customer_id']}", headers=key).json()
     assert d["customer"]["customer_id"] == cust["customer_id"]
     assert {"subscriptions", "mandates", "debits", "cases", "contacts", "actions", "replies"} <= d.keys()

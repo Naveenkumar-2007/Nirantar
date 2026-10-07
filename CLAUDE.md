@@ -175,9 +175,14 @@ B2B receivables (ADR-0025): invoices (ledgered at issue, verified partial paymen
 (final notice always approved, +30 → collections case), dispute/write-off governance, ageing; one statement per
 customer per day with a pay-all link (FIFO allocation → billing.payment_allocations), window-denied steps deferred.
 Gateway: same idempotency key → advisory lock + 'executing' lease, so a concurrent caller gets `in_progress`.
+Checkout recovery (ADR-0028): store events (POST /v1/checkout/events, `checkout_ingest` key only) + provider
+webhooks → CheckoutRecoveryWorkflow (30-min quiet → diagnose cause → holdout → one cause-worded reminder + ≤1 follow-up,
+exact cart amount, WhatsApp+promotional consent) → verified recovery-link payment booked once; ≥₹10k → a person.
+Demo (deploy/space, Dockerfile): whole stack in one container on :7860, NIRANTAR_DEMO=1 (mock only, refuses real
+credentials); CI .github/workflows/ci.yml; deploy-huggingface.yml → private Space Naveen-2007/nirantar.
 Live voice (ADR-0026): comms.place_call (Exotel connect-to-flow, voice_call policy incl. registered header), signed
 call token → server-side context in the Voicebot gateway (/voice/exotel), outcomes → promise + WhatsApp link /
 hardship case / opt-out, encrypted transcripts, Exotel status webhook; tests can never dial (EXOTEL_* stripped).
 AI security round 2 (ADR-0027): security/guardrails.py (normalise, redact PII, injection detection) inside the LLM
 gateway; stricter RBI conduct rules (red team found a visit-threat gap); tests/security red-team suite.
-Next: go-live (founder: server + domain), WhatsApp permanent token → submit templates, checkout recovery, multi-agent v2 + agent evals, mandate charging, CI + load tests.
+Next: go-live (founder: server + domain), WhatsApp permanent token → submit templates, multi-agent v2 + agent evals, mandate charging, CI + load tests.

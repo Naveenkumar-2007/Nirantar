@@ -687,6 +687,108 @@ def p_invoice_statement(c: Connection, ctx: ToolContext, a: BaseModel) -> Action
     return contact_request(c, ctx, a.customer_id, "send_whatsapp", "service")
 
 
+class CheckoutStepIn(BaseModel):
+    session_id: str = Field(pattern=r"^chk_[0-9A-Z]{26}$")
+    step: str = Field(pattern=r"^(nudge|follow_up)$")
+
+
+_CHECKOUT_TEMPLATE = {"bank_issue": "whatsapp.checkout_bank_issue", "payment_failed": "whatsapp.checkout_payment_retry",
+                      "insufficient_funds": "whatsapp.checkout_payment_retry",
+                      "card_problem": "whatsapp.checkout_payment_retry",
+                      "limit_exceeded": "whatsapp.checkout_payment_retry",
+                      "repeated_failures": "whatsapp.checkout_payment_retry"}
+
+
+def _checkout_items(items: Any) -> str:
+    rows = items if isinstance(items, list) else json.loads(items or "[]")
+    names = [f"{r['qty']} x {r['name']}" if int(r.get("qty", 1)) > 1 else str(r["name"]) for r in rows[:3]]
+    more = len(rows) - len(names)
+    if not names:
+        return "your items"
+    return ", ".join(names) + (f" and {more} more" if more > 0 else "")
+
+
+def h_checkout_recovery(ctx: ToolContext, a: BaseModel) -> dict[str, Any]:
+    """Remind a customer about a checkout they did not complete, with a fresh secure payment link for EXACTLY the
+    checkout's amount (never a discount, never a different amount). Reuses an open link for the same checkout."""
+    assert isinstance(a, CheckoutStepIn)
+    from nirantar.billing import checkout as paypage
+    from nirantar.comms.sink import ChannelNotConnected
+
+    engine = ctx.services["engine"]
+    with tenant_tx(ctx.tenant_id, engine) as c:
+        s = c.execute(text("SELECT k.*, t.name AS business FROM billing.checkout_sessions k JOIN core.tenants t ON "
+                           "t.tenant_id=k.tenant_id WHERE k.tenant_id=:t AND k.session_id=:s"),
+                      {"t": ctx.tenant_id, "s": a.session_id}).one()
+        if s.status != "open":
+            raise ValueError(f"checkout is {s.status}; refusing to remind")
+        if s.customer_id is None:
+            raise ValueError("checkout has no customer to contact")
+        cust = _customer(c, ctx.tenant_id, s.customer_id)
+        amount = Money(int(s.amount_minor), s.currency)
+        open_req = c.execute(text(
+            "SELECT request_id, url FROM billing.payment_requests WHERE tenant_id=:t AND checkout_session_id=:s AND "
+            "status IN ('created','sent') AND amount_minor=:a ORDER BY created_at DESC LIMIT 1"),
+            {"t": ctx.tenant_id, "s": a.session_id, "a": amount.minor}).first()
+        lang = cust.preferred_language or "en"
+        key = "whatsapp.checkout_follow_up" if a.step == "follow_up" else _CHECKOUT_TEMPLATE.get(
+            s.cause or "", "whatsapp.checkout_reminder")
+        tpl = templates.resolve(c, ctx.tenant_id, key, lang)
+    if open_req is not None:
+        request_id, url = open_req.request_id, open_req.url
+    else:
+        provider: PaymentProvider = ctx.services["provider"]
+        request_id = new_id("prq")
+        if paypage.supports_checkout(provider):
+            order = provider.create_order(amount, request_id,                       # type: ignore[attr-defined]
+                                          {"nirantar_ref": request_id})
+            kind, link_id = "checkout", order.order_id
+            url = f"{paypage.public_base()}/pay/{paypage.token_for(ctx.tenant_id, request_id)}"
+        else:
+            link = provider.create_payment_link(LinkRequest(
+                amount=amount, reference_id=request_id, description=f"Order {s.checkout_ref}"[:120],
+                customer_name=None, customer_phone=None, customer_email=None, expire_by=ctx.now + timedelta(days=3)))
+            kind, link_id, url = "link", link.link_id, link.url
+        with tenant_tx(ctx.tenant_id, engine) as c:
+            c.execute(text("INSERT INTO billing.payment_requests (tenant_id, request_id, checkout_session_id, "
+                           "customer_id, provider, provider_link_id, url, amount_minor, status, created_at, kind) "
+                           "VALUES (:t, :r, :s, :c, :p, :l, :u, :a, 'created', :n, :k)"),
+                      {"t": ctx.tenant_id, "r": request_id, "s": a.session_id, "c": s.customer_id, "p": provider.name,
+                       "l": link_id, "u": url, "a": amount.minor, "n": ctx.now, "k": kind})
+    values = {"name": first_name(cust.display_name), "business": s.business, "amount": rupees(amount),
+              "items": _checkout_items(s.items), "link": url}
+    body = tpl.render(**values)
+    mid, error = None, None
+    try:
+        mid = ctx.services["comms"].send("whatsapp", s.customer_id, body, ctx.now, tenant_id=ctx.tenant_id,
+                                         template=OutboundTemplate(key, lang, values))
+    except ChannelNotConnected as exc:
+        error = str(exc)[:200]
+    if mid is not None:
+        with tenant_tx(ctx.tenant_id, engine) as c:
+            c.execute(text("UPDATE billing.payment_requests SET status='sent', sent_at=:n, channel_message_id=:m "
+                           "WHERE tenant_id=:t AND request_id=:r AND status='created'"),
+                      {"n": ctx.now, "m": mid, "t": ctx.tenant_id, "r": request_id})
+            c.execute(text("UPDATE billing.checkout_sessions SET first_contact_at=coalesce(first_contact_at, :n) "
+                           "WHERE tenant_id=:t AND session_id=:s"),
+                      {"n": ctx.now, "t": ctx.tenant_id, "s": a.session_id})
+            c.execute(text("INSERT INTO ops.contacts (tenant_id, contact_id, customer_id, channel, purpose, status, "
+                           "at) VALUES (:t, :i, :c, 'whatsapp', 'promotional', 'accepted', :n)"),
+                      {"t": ctx.tenant_id, "i": new_id("cnt"), "c": s.customer_id, "n": ctx.now})
+    return {"provider_ref": mid, "request_id": request_id, "url": url, "sent": mid is not None, "text": body,
+            "template": key, "amount_minor": amount.minor, "channel_error": error}
+
+
+def p_checkout_recovery(c: Connection, ctx: ToolContext, a: BaseModel) -> ActionRequest | None:
+    assert isinstance(a, CheckoutStepIn)
+    cust = c.execute(text("SELECT customer_id FROM billing.checkout_sessions WHERE tenant_id=:t AND session_id=:s"),
+                     {"t": ctx.tenant_id, "s": a.session_id}).scalar_one_or_none()
+    if cust is None:
+        return None                                     # the handler refuses: nobody to contact
+    # a cart reminder is marketing under WhatsApp's rules: WhatsApp AND promotional consent are both required
+    return contact_request(c, ctx, cust, "send_whatsapp", "promotional")
+
+
 # ---------------------------------------------------------------- human takeover (P8.5, ADR-0021)
 class OperatorReplyIn(BaseModel):
     customer_id: str
@@ -1107,6 +1209,9 @@ TOOLS: dict[str, Tool] = {t.name: t for t in (
     Tool("billing.send_invoice_statement", "One message for all of a business customer's open invoices with one "
          "'pay all' link (allocated oldest-due-first).", StatementIn, h_invoice_statement, "money",
          policy=p_invoice_statement),
+    Tool("billing.send_checkout_recovery", "Remind a customer about a checkout they did not complete, with a "
+         "secure payment link for exactly the checkout's amount.", CheckoutStepIn, h_checkout_recovery, "money",
+         policy=p_checkout_recovery),
     Tool("billing.send_final_notice", "Send the final notice for an overdue invoice (always approved by a person).",
          InvoiceStepIn, h_invoice_request, "money", policy=p_invoice_request, approval="always"),
     Tool("comms.place_call", "Place an outbound recovery call (Exotel, the customer's language; recording disclosed "
@@ -1137,4 +1242,5 @@ AGENT_SCOPES: dict[str, frozenset[str]] = {
                                     "billing.send_invoice_statement",
                                     "customer.get_profile"}),
     "billing_agent": frozenset({"billing.send_payment_request", "comms.send_receipt", "customer.get_profile"}),
+    "checkout_agent": frozenset({"billing.send_checkout_recovery", "customer.get_profile"}),
 }

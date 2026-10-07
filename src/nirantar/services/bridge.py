@@ -43,6 +43,7 @@ from nirantar.settings import service as settings
 from nirantar.settings.schema import Operations
 from nirantar.workflows import TASK_QUEUE
 from nirantar.workflows.bridge import debit_signal, workflow_id
+from nirantar.workflows.checkout import CheckoutInput, CheckoutRecoveryWorkflow, checkout_workflow_id
 from nirantar.workflows.debit_cycle import DebitCycleWorkflow
 from nirantar.workflows.dispute import DisputeInput, DisputeWorkflow, dispute_workflow_id
 from nirantar.workflows.receivables import InvoiceChaseWorkflow, InvoiceInput, invoice_workflow_id
@@ -50,7 +51,7 @@ from nirantar.workflows.types import CycleInput
 
 log = structlog.get_logger("event-bridge")
 CONSUMER = "event-bridge"
-TOPICS = ("provider", "subscription", "payment", "reply", "dispute", "mandate", "invoice")
+TOPICS = ("provider", "subscription", "payment", "reply", "dispute", "mandate", "invoice", "checkout")
 TERMINAL_DISPUTE = ("won", "lost", "accepted")
 TRANSIENT_RPC = (RPCStatusCode.UNAVAILABLE, RPCStatusCode.DEADLINE_EXCEEDED, RPCStatusCode.RESOURCE_EXHAUSTED)
 
@@ -127,6 +128,8 @@ class EventBridge:
             outcome = await self._start_invoice(ev)
         elif t == "invoice.payment_verified":
             outcome = await self._wake_invoice(ev)
+        elif t == "checkout.updated":
+            outcome = await self._checkout(ev)
         else:
             outcome = "ignored"
         self.stats[f"{t}:{outcome}"] += 1
@@ -205,6 +208,25 @@ class EventBridge:
         except WorkflowAlreadyStartedError:
             return "already_started"
         return "started"
+
+    async def _checkout(self, ev: EventEnvelope) -> str:
+        """Checkout drop-off recovery (ADR-0028): the first event starts the checkout's workflow; later ones wake it."""
+        wid = checkout_workflow_id(ev.tenant_id, ev.payload["session_id"])
+        if ev.payload.get("new"):
+            try:
+                await self.client.start_workflow(
+                    CheckoutRecoveryWorkflow.run, CheckoutInput(ev.tenant_id, ev.payload["session_id"]), id=wid,
+                    task_queue=self.task_queue, id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE)
+            except WorkflowAlreadyStartedError:
+                return "already_started"
+            return "started"
+        try:
+            await self.client.get_workflow_handle(wid).signal("checkout_update", ev.payload)
+        except RPCError as exc:
+            if exc.status == RPCStatusCode.NOT_FOUND:
+                return "no_workflow"
+            raise
+        return "signalled"
 
     async def _wake_invoice(self, ev: EventEnvelope) -> str:
         try:

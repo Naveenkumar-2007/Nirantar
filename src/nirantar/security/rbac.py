@@ -19,6 +19,7 @@ class Permission(StrEnum):
     WEBHOOK_INGEST = "webhook:ingest"       # service principals only
     WORKFLOW_EXECUTE = "workflow:execute"   # workers
     A2A_CALL = "a2a:call"                   # external agents (customer agents, partners) over A2A
+    CHECKOUT_INGEST = "checkout:ingest"     # a store's server reports checkout events — and nothing else
     TENANT_ADMIN = "tenant:admin"
 
 
@@ -34,6 +35,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
     "service_ingress": frozenset({Permission.WEBHOOK_INGEST}),
     "service_worker": frozenset({Permission.WORKFLOW_EXECUTE, Permission.READ}),
     "a2a_partner": frozenset({Permission.A2A_CALL}),           # can only talk A2A; no dashboard/API reads
+    "checkout_ingest": frozenset({Permission.CHECKOUT_INGEST}),  # a store's server key: checkout events only
 }
 
 

@@ -150,6 +150,13 @@ def apply_payment(conn: Connection, tenant_id: str, provider: PaymentProvider, p
         res = allocate(conn, tenant_id, provider, invoice_ids, p, now)
         return ProcessOutcome("processed", "invoice.payment_verified" if res["applied"] else None, None,
                               str(res.get("status") or res.get("reason") or ""))
+    from nirantar.checkout import service as checkouts
+
+    chk = checkouts.find_session(conn, tenant_id, p)
+    if chk is not None:                           # checkout drop-off recovery (ADR-0028): verified, booked once
+        res = checkouts.apply_provider_payment(conn, tenant_id, provider, chk[0], chk[1], p, now)
+        return ProcessOutcome("processed", "checkout.updated" if res["applied"] else None, None,
+                              str(res.get("status") or res.get("reason") or ""))
     link = find_debit(conn, tenant_id, p)
     offer = None if link else find_offer(conn, tenant_id, p)
     debit_id, customer_id, due_minor = link if link else (None, None, None)

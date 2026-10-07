@@ -64,7 +64,7 @@ def seed(engine: Engine, n_customers: int = 120, seed_value: int = 11, llm: LLMG
     tenant = new_id("ten")
     mock, sink = MockProvider(webhook_secret="whsec_demo"), MockCommsSink()
     with tenant_tx(tenant, engine) as c:
-        create_tenant(c, tenant, "Chai Club (demo)", {"segments": ["subscription"], "demo": True})
+        create_tenant(c, tenant, "Chai Club (demo)", {"segments": ["subscription", "ecommerce"], "demo": True})
         connect_provider(c, tenant, "mock", "test", "literal:unused", "literal:whsec_demo")
         # holdout size comes from the tenant's experiments settings (platform default 8%)
         holdout = experiments.default_holdout_bp(c, tenant)
@@ -166,6 +166,7 @@ def seed(engine: Engine, n_customers: int = 120, seed_value: int = 11, llm: LLMG
             close_cycle(c, tenant, debit, cust, outcome, True, Money.of(price).minor if outcome == "recovered" else 0,
                         pred_id, exp, case_id, close_at)
         stats[outcome] += 1
+    checkout_stats = seed_checkouts(engine, tenant, mock, sink, rng, today, max(20, n_customers // 2))
     # a treasury request awaiting maker-checker, so the approval inbox has real work
     clock._at = datetime.now(UTC)
     gw.call(tenant_id=tenant, agent_id="treasury_agent", tool_name="treasury.request_credit_draw",
@@ -175,9 +176,102 @@ def seed(engine: Engine, n_customers: int = 120, seed_value: int = 11, llm: LLMG
     # learn this tenant's contact effects + risk threshold from the outcomes just verified (stored with evidence)
     with tenant_tx(tenant, engine) as c:
         learned = learning.refresh(c, tenant, datetime.now(UTC))
-    return {"tenant_id": tenant, "experiment_id": exp, "api_keys": keys, "stats": stats,
+    return {"tenant_id": tenant, "experiment_id": exp, "api_keys": keys, "stats": stats, "checkouts": checkout_stats,
             "learned": {k: {"version": v["version"], "value": v["value"]} for k, v in learned.items()},
             "messages_sent": len(sink.messages)}
+
+
+PRODUCTS = [("Assam CTC chai, 1 kg", "649"), ("Masala chai gift box", "1299"), ("Brass chai kettle", "2499"),
+            ("Darjeeling first flush, 250 g", "899"), ("Chai Club starter kit", "1899"), ("Cardamom, 200 g", "349")]
+FAILURES = [None, None, "bank_technical_error", "insufficient_balance", "payment_cancelled", "timeout"]
+
+
+def _next_window(at: datetime) -> datetime:
+    """The first moment at or after `at` inside 10:00-19:00 IST (when a reminder may go out)."""
+    local = at + timedelta(hours=5, minutes=30)
+    if 10 <= local.hour < 19:
+        return at
+    day = local.date() if local.hour < 10 else local.date() + timedelta(days=1)
+    return _ist(day, 10, 15)
+
+
+def seed_checkouts(engine: Engine, tenant: str, mock: MockProvider, sink: MockCommsSink, rng: random.Random,
+                   today: date, n: int) -> dict[str, int]:
+    """Checkout drop-off recovery through the real path: store events → diagnosis → holdout assignment → the
+    gateway's policy-checked reminder → the customer pays the link → the provider's webhook → verification → ledger.
+    Customer behaviour (who abandons, who comes back) is simulated; holdout customers are never contacted."""
+    from nirantar.checkout import service as checkouts
+    from nirantar.payments.domain import PaymentStatus, ProviderPayment
+
+    out = {"checkouts": 0, "paid_unaided": 0, "reminded": 0, "recovered": 0, "holdout_paid": 0}
+    for i in range(n):
+        name = NAMES[(i + 3) % len(NAMES)]
+        product, price = PRODUCTS[rng.randrange(len(PRODUCTS))]
+        qty = 1 if rng.random() < 0.8 else 2
+        amount = Money.of(str(int(price) * qty))
+        started = _ist(today - timedelta(days=rng.randint(4, 24)), rng.randint(9, 22), rng.randint(0, 59))
+        ref = f"CC-{40_000 + i}"
+        cust = checkouts.CheckoutCustomer(f"shop-{i:04d}", name, f"+9197{rng.randint(10_000_000, 99_999_999)}",
+                                          language=LANGS[i % len(LANGS)],
+                                          consents={"whatsapp": True, "promotional": rng.random() > 0.15})
+        failure = FAILURES[rng.randrange(len(FAILURES))]
+        with tenant_tx(tenant, engine) as c:
+            r = checkouts.record_event(c, tenant, checkouts.CheckoutEvent(
+                f"{ref}-1", "initiated", ref, started, amount=amount, items=[{"name": product, "qty": qty}],
+                customer=cust), started)
+            if rng.random() < 0.7:
+                checkouts.record_event(c, tenant, checkouts.CheckoutEvent(
+                    f"{ref}-2", "payment_page", ref, started + timedelta(minutes=2)), started)
+            if failure:
+                checkouts.record_event(c, tenant, checkouts.CheckoutEvent(
+                    f"{ref}-3", "payment_failed", ref, started + timedelta(minutes=3), failure_code=failure), started)
+        out["checkouts"] += 1
+        session = r["session_id"]
+        if rng.random() < 0.22:                               # came back and paid on their own, within minutes
+            with tenant_tx(tenant, engine) as c:
+                checkouts.record_event(c, tenant, checkouts.CheckoutEvent(
+                    f"{ref}-9", "paid", ref, started + timedelta(minutes=12), amount=amount), started)
+            out["paid_unaided"] += 1
+            continue
+        quiet = started + timedelta(minutes=40)
+        with tenant_tx(tenant, engine) as c:
+            a = checkouts.assess(c, tenant, session, quiet, 100_00)
+        contacted = False
+        if a["eligible"] and a["arm"] == "treatment":
+            at = _next_window(quiet)
+            gw = ToolGateway(engine, TOOLS, AGENT_SCOPES, {"engine": engine, "provider": mock, "comms": sink},
+                             clock=FixedClock(at))
+            res = gw.call(tenant_id=tenant, agent_id="checkout_agent", tool_name="billing.send_checkout_recovery",
+                          args={"session_id": session, "step": "nudge"}, idempotency_key=f"checkout:{session}:nudge")
+            contacted = res.status == "executed" and bool(res.output.get("sent"))
+            with tenant_tx(tenant, engine) as c:
+                checkouts.record_step(c, tenant, session, "nudge", res.status, res.action_id,
+                                      {"sent": res.output.get("sent"), "template": res.output.get("template")}, at)
+            out["reminded"] += int(contacted)
+            if contacted and rng.random() < 0.34:
+                paid_at = at + timedelta(hours=rng.randint(1, 20))
+                pay = ProviderPayment("mock", mock._next("pay"), amount, PaymentStatus.CAPTURED, "upi", None, None,
+                                      paid_at, notes={"reference_id": res.output["request_id"]})
+                mock.payments[pay.provider_payment_id] = pay
+                headers, body = mock.webhook_for("payment.captured", "payment", MockProvider.payment_entity(pay),
+                                                 at=paid_at)
+                ing = ingest_webhook(engine, mock, tenant, headers, body, FixedClock(paid_at))
+                process_raw_event(engine, mock, tenant, str(ing.raw_event_id), FixedClock(paid_at))
+                out["recovered"] += 1
+                continue
+        else:
+            with tenant_tx(tenant, engine) as c:
+                checkouts.record_step(c, tenant, session, "held_out" if a["eligible"] else "ineligible",
+                                      "held_out" if a["eligible"] else "ineligible", None, {}, quiet)
+        if not contacted and rng.random() < 0.13:              # some come back without any reminder
+            with tenant_tx(tenant, engine) as c:
+                checkouts.record_event(c, tenant, checkouts.CheckoutEvent(
+                    f"{ref}-8", "paid", ref, quiet + timedelta(hours=rng.randint(2, 30)), amount=amount), quiet)
+            out["holdout_paid"] += int(a.get("arm") == "holdout")
+            continue
+        with tenant_tx(tenant, engine) as c:
+            checkouts.close(c, tenant, session, "expired", "no payment within 72 hours", started + timedelta(hours=72))
+    return out
 
 
 def main() -> None:

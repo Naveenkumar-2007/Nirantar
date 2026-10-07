@@ -2,13 +2,29 @@
 # A tenant starts with these; it can propose its own versions, which go live only after a second person
 # approves them (maker-checker) and they pass the compliance checks in nirantar.settings.templates.
 # Placeholders: facts are injected by code (amount from Money formatting, link from the payment-link tool).
-version: "2026-09-29.1"
+version: "2026-10-08.1"
 
 specs:
   whatsapp.recovery:
     channel: whatsapp
     required: [amount, link]
     allowed: [name, amount, plan, link]
+  whatsapp.checkout_reminder:     # checkout drop-off: left before paying (ADR-0028)
+    channel: whatsapp
+    required: [amount, link]
+    allowed: [name, business, amount, items, link]
+  whatsapp.checkout_payment_retry: # checkout drop-off: the payment attempt failed
+    channel: whatsapp
+    required: [amount, link]
+    allowed: [name, business, amount, items, link]
+  whatsapp.checkout_bank_issue:    # checkout drop-off: the customer's bank was having trouble
+    channel: whatsapp
+    required: [amount, link]
+    allowed: [name, business, amount, items, link]
+  whatsapp.checkout_follow_up:     # checkout drop-off: the one and only follow-up
+    channel: whatsapp
+    required: [amount, link]
+    allowed: [name, business, amount, items, link]
   whatsapp.invoice_statement:    # B2B: all of a customer's open invoices in ONE message, one "pay all" link
     channel: whatsapp
     required: [count, amount, list, link]
@@ -97,6 +113,22 @@ templates:
     en: "Hi {name}, your {amount} payment for {plan} didn't go through. You can pay securely here: {link}"
     hi: "नमस्ते {name}, {plan} के लिए आपका {amount} का भुगतान नहीं हो पाया। आप यहाँ सुरक्षित भुगतान कर सकते हैं: {link}"
     te: "నమస్తే {name}, {plan} కోసం మీ {amount} చెల్లింపు పూర్తి కాలేదు. ఇక్కడ సురక్షితంగా చెల్లించవచ్చు: {link}"
+  whatsapp.checkout_reminder:
+    en: "Hello {name}, your order from {business} ({items}, {amount}) is saved. You can complete it securely here: {link}"
+    hi: "नमस्ते {name}, {business} से आपका ऑर्डर ({items}, {amount}) सुरक्षित रखा गया है। आप इसे यहाँ सुरक्षित रूप से पूरा कर सकते हैं: {link}"
+    te: "నమస్తే {name}, {business} లో మీ ఆర్డర్ ({items}, {amount}) సేవ్ చేయబడింది. మీరు దీన్ని ఇక్కడ సురక్షితంగా పూర్తి చేయవచ్చు: {link}"
+  whatsapp.checkout_payment_retry:
+    en: "Hello {name}, your payment of {amount} to {business} did not go through, so nothing was charged. Your order is saved; you can try again with UPI or another method here: {link}"
+    hi: "नमस्ते {name}, {business} को आपका {amount} का भुगतान पूरा नहीं हुआ, इसलिए कोई राशि नहीं कटी। आपका ऑर्डर सुरक्षित है; आप यहाँ UPI या किसी और तरीके से फिर से कोशिश कर सकते हैं: {link}"
+    te: "నమస్తే {name}, {business} కు మీ {amount} చెల్లింపు పూర్తి కాలేదు, కాబట్టి ఏమీ కట్ కాలేదు. మీ ఆర్డర్ సేవ్ అయింది; ఇక్కడ UPI లేదా మరో పద్ధతితో మళ్ళీ ప్రయత్నించవచ్చు: {link}"
+  whatsapp.checkout_bank_issue:
+    en: "Hello {name}, your bank had a temporary problem when you paid {amount} to {business}, so nothing was charged. Your order is saved; you can complete it here when convenient: {link}"
+    hi: "नमस्ते {name}, {business} को {amount} का भुगतान करते समय आपके बैंक में अस्थायी समस्या थी, इसलिए कोई राशि नहीं कटी। आपका ऑर्डर सुरक्षित है; सुविधा अनुसार यहाँ पूरा करें: {link}"
+    te: "నమస్తే {name}, {business} కు {amount} చెల్లించేటప్పుడు మీ బ్యాంక్‌లో తాత్కాలిక సమస్య వచ్చింది, కాబట్టి ఏమీ కట్ కాలేదు. మీ ఆర్డర్ సేవ్ అయింది; వీలైనప్పుడు ఇక్కడ పూర్తి చేయండి: {link}"
+  whatsapp.checkout_follow_up:
+    en: "Hello {name}, one last reminder from {business}: your order ({amount}) is still saved for you here: {link}. If you no longer want it, there is nothing you need to do."
+    hi: "नमस्ते {name}, {business} की ओर से आखिरी याद: आपका ऑर्डर ({amount}) अभी भी यहाँ आपके लिए सुरक्षित है: {link}। अगर अब नहीं चाहिए, तो आपको कुछ करने की ज़रूरत नहीं है।"
+    te: "నమస్తే {name}, {business} నుండి చివరి గుర్తు: మీ ఆర్డర్ ({amount}) ఇంకా ఇక్కడ మీ కోసం సేవ్ అయి ఉంది: {link}. మీకు ఇక అవసరం లేకపోతే, మీరు ఏమీ చేయాల్సిన అవసరం లేదు."
   whatsapp.invoice_statement:
     en: "Hello {name}, you have {count} open invoices from {business} totalling {amount}: {list}. You can pay all of them securely here: {link}"
     hi: "नमस्ते {name}, {business} के आपके {count} इनवॉइस बकाया हैं, कुल {amount}: {list}। आप सभी का भुगतान यहाँ सुरक्षित रूप से कर सकते हैं: {link}"

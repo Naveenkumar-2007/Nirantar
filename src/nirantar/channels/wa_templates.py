@@ -27,7 +27,7 @@ CLOSING = {"en": "Thank you.", "hi": "धन्यवाद।", "te": "ధన�
 EXAMPLES = {"name": "Priya", "amount": "₹999.00", "plan": "Chai Club monthly", "date": "05 Oct 2026",
             "link": "https://rzp.io/i/example", "offer": "Your restart comes with 10% off the first payment.",
             "ref": "pay_Q4xY7ExAmPlE", "business": "Chai Club", "number": "INV-2026-041",
-            "deadline": "12 Oct 2026", "count": "3",
+            "deadline": "12 Oct 2026", "count": "3", "items": "2 x Masala chai blend",
             "list": "INV-041 ₹4,000.00 (due 05 Oct); INV-044 ₹2,500.00 (due 10 Oct)"}
 
 
@@ -42,6 +42,15 @@ class MetaTemplate:
 CATALOG = (
     MetaTemplate("whatsapp.recovery", "nirantar_payment_retry", "UTILITY", ("name", "amount", "plan", "link")),
     MetaTemplate("whatsapp.payment_due", "nirantar_payment_due", "UTILITY", ("name", "plan", "amount", "date", "link")),
+    # cart reminders are MARKETING under Meta's policy: sent only with promotional consent (ADR-0028)
+    MetaTemplate("whatsapp.checkout_reminder", "nirantar_checkout_reminder", "MARKETING",
+                 ("name", "business", "items", "amount", "link")),
+    MetaTemplate("whatsapp.checkout_payment_retry", "nirantar_checkout_payment_retry", "MARKETING",
+                 ("name", "amount", "business", "link")),
+    MetaTemplate("whatsapp.checkout_bank_issue", "nirantar_checkout_bank_issue", "MARKETING",
+                 ("name", "amount", "business", "link")),
+    MetaTemplate("whatsapp.checkout_follow_up", "nirantar_checkout_follow_up", "MARKETING",
+                 ("name", "business", "amount", "link")),
     MetaTemplate("whatsapp.invoice_statement", "nirantar_invoice_statement", "UTILITY",
                  ("name", "business", "count", "amount", "list", "link")),
     MetaTemplate("whatsapp.invoice_reminder", "nirantar_invoice_reminder", "UTILITY",

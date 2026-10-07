@@ -18,7 +18,7 @@ from nirantar.core.money import Money
 from nirantar.db.stores import Outbox
 from nirantar.verifier.payments import accrue_debit
 
-SEGMENTS = frozenset({"subscription", "lending", "sip", "insurance", "b2b"})
+SEGMENTS = frozenset({"subscription", "lending", "sip", "insurance", "b2b", "ecommerce"})
 
 
 @dataclass(frozen=True)

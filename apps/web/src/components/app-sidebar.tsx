@@ -6,7 +6,7 @@ import { useTheme } from "next-themes";
 import {
   Activity, BadgeCheck, Blocks, Bot, Building2, ChevronsUpDown, ClipboardCheck, Contact, Database, FlaskConical, Gauge,
   HandCoins, HeartHandshake, Layers, LifeBuoy, LogOut, MessagesSquare, Monitor, Moon, PlugZap, ReceiptIndianRupee, Repeat, Rocket, Siren, ScrollText, ShieldCheck, Sparkles,
-  Sun, Users, Wallet, Workflow,
+  ShoppingCart, Sun, Users, Wallet, Workflow,
 } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader,
@@ -34,6 +34,7 @@ const NAV: { label: string; items: NavItem[] }[] = [
   ] },
   { label: "Grow", items: [
     { href: "/retention", label: "Retention & win-back", icon: HeartHandshake },
+    { href: "/checkout-recovery", label: "Checkout recovery", icon: ShoppingCart },
     { href: "/receivables", label: "Receivables", icon: ReceiptIndianRupee },
     { href: "/experiments", label: "Experiments", icon: FlaskConical },
     { href: "/automations", label: "Automations", icon: Workflow },

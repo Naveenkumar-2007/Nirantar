@@ -61,16 +61,20 @@ def view(engine: Engine, token: str, checkout_key: str | None) -> dict[str, Any]
         r = c.execute(text(
             "SELECT r.status, r.kind, r.provider_link_id, r.amount_minor, "
             "coalesce(d.scheduled_for, i.due_on, (SELECT min(x.due_on) FROM billing.invoices x WHERE "
-            "x.tenant_id=r.tenant_id AND x.invoice_id = ANY(r.invoice_ids))) AS scheduled_for, "
-            "CASE WHEN d.status='succeeded' OR i.status='paid' OR (r.invoice_ids IS NOT NULL AND NOT EXISTS (SELECT 1 "
+            "x.tenant_id=r.tenant_id AND x.invoice_id = ANY(r.invoice_ids)), CAST(r.created_at AS date)) "
+            "AS scheduled_for, "
+            "CASE WHEN d.status='succeeded' OR i.status='paid' OR k.status='paid' OR (r.invoice_ids IS NOT NULL AND "
+            "NOT EXISTS (SELECT 1 "
             "FROM billing.invoices x WHERE x.tenant_id=r.tenant_id AND x.invoice_id = ANY(r.invoice_ids) AND "
             "x.status IN ('open','partially_paid'))) THEN 'succeeded' ELSE 'open' END AS debit_status, "
             "cu.display_name, cu.preferred_language, "
             "coalesce(p.name, 'Invoice ' || i.number, 'Statement: ' || cardinality(r.invoice_ids) || ' invoices', "
+            "'Order ' || k.checkout_ref, "
             "'subscription') AS plan, t.name AS business "
             "FROM billing.payment_requests r "
             "LEFT JOIN billing.debits d ON d.tenant_id=r.tenant_id AND d.debit_id=r.debit_id "
             "LEFT JOIN billing.invoices i ON i.tenant_id=r.tenant_id AND i.invoice_id=r.invoice_id "
+            "LEFT JOIN billing.checkout_sessions k ON k.tenant_id=r.tenant_id AND k.session_id=r.checkout_session_id "
             "JOIN billing.customers cu ON cu.tenant_id=r.tenant_id AND cu.customer_id=r.customer_id "
             "LEFT JOIN billing.subscriptions s ON s.tenant_id=d.tenant_id AND s.subscription_id=d.subscription_id "
             "LEFT JOIN billing.plans p ON p.tenant_id=s.tenant_id AND p.plan_id=s.plan_id "
@@ -90,7 +94,8 @@ def confirm(engine: Engine, provider: PaymentProvider, token: str, *, order_id: 
             signature: str, now: datetime) -> dict[str, Any]:
     tenant_id, request_id = parse_token(token)
     with tenant_tx(tenant_id, engine) as c:
-        r = c.execute(text("SELECT debit_id, invoice_id, invoice_ids, provider_link_id, kind, status FROM "
+        r = c.execute(text("SELECT debit_id, invoice_id, invoice_ids, checkout_session_id, provider_link_id, kind, "
+                           "status FROM "
                            "billing.payment_requests WHERE tenant_id=:t AND request_id=:r"),
                       {"t": tenant_id, "r": request_id}).one_or_none()
     if r is None or r.kind != "checkout" or r.provider_link_id != order_id:
@@ -106,8 +111,12 @@ def confirm(engine: Engine, provider: PaymentProvider, token: str, *, order_id: 
             c.execute(text("UPDATE billing.payment_requests SET status='paid', provider_payment_id=:pp, paid_at=:n "
                            "WHERE tenant_id=:t AND request_id=:r"),
                       {"pp": payment_id, "n": now, "t": tenant_id, "r": request_id})
-        if r.debit_id:
-            done: bool = c.execute(text("SELECT status FROM billing.debits WHERE tenant_id=:t AND debit_id=:d"),
+        done: bool
+        if r.checkout_session_id:                               # a checkout recovery: verified and booked
+            done = c.execute(text("SELECT status FROM billing.checkout_sessions WHERE tenant_id=:t AND session_id=:s"),
+                             {"t": tenant_id, "s": r.checkout_session_id}).scalar_one() == "paid"
+        elif r.debit_id:
+            done = c.execute(text("SELECT status FROM billing.debits WHERE tenant_id=:t AND debit_id=:d"),
                              {"t": tenant_id, "d": r.debit_id}).scalar_one() == "succeeded"
         else:                                                   # an invoice or a statement: the money was allocated
             ids = [r.invoice_id] if r.invoice_id else list(r.invoice_ids or [])

@@ -62,7 +62,11 @@ def overview(conn: Connection, now: datetime) -> dict[str, Any]:
                     since=now - timedelta(days=30))
     pending_approvals: int = conn.execute(text("SELECT count(*) FROM ops.approvals WHERE "
         "status='pending'")).scalar_one()
-    exps = _rows(conn, "SELECT experiment_id, name FROM experiments.experiments ORDER BY created_at DESC LIMIT 1")
+    # the experiment the recovery outcomes are recorded against (checkout recovery reports on its own page)
+    exps = _rows(conn, "SELECT e.experiment_id, e.name FROM experiments.experiments e "
+                       "ORDER BY (SELECT max(observed_at) "
+                       "FROM experiments.outcomes o WHERE o.tenant_id=e.tenant_id AND o.experiment_id=e.experiment_id) "
+                       "DESC NULLS LAST, e.created_at DESC LIMIT 1")
     incremental = analyze(conn, conn.execute(text("SELECT current_setting('app.tenant_id', true)")).scalar_one(),
                           exps[0]["experiment_id"]) if exps else None
     open_cases: int = conn.execute(text("SELECT count(*) FROM ops.cases WHERE status <> 'closed'")).scalar_one()

@@ -257,6 +257,10 @@ def create_app(svc: Services | None = None) -> FastAPI:
             db = f"error: {type(exc).__name__}"
         return {"status": "ok" if db == "ok" else "degraded", "db": db}
 
+    from nirantar.api import checkout_routes
+
+    checkout_routes.mount(app)
+
     @app.get("/ready")
     def ready(s: Services = Depends(services)) -> JSONResponse:
         """Readiness: 200 only when the database answers AND is migrated to the revision this build expects."""

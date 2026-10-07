@@ -217,14 +217,19 @@ RECOVERY_EXPERIMENT = "recovery"
 def ensure_recovery_experiment(conn: Connection, tenant_id: str) -> str:
     """The tenant's running recovery experiment, created on first use with the tenant's holdout settings.
 
-    Every DebitCycleWorkflow is assigned to it, so recovery uplift is always measured against a holdout. An
-    advisory lock makes concurrent first debits agree on one experiment.
+    Every DebitCycleWorkflow is assigned to it, so recovery uplift is always measured against a holdout.
     """
-    conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"recovery-exp:{tenant_id}"})
+    return ensure_experiment(conn, tenant_id, RECOVERY_EXPERIMENT)
+
+
+def ensure_experiment(conn: Connection, tenant_id: str, name: str) -> str:
+    """The tenant's running experiment called `name` (treatment vs holdout), created on first use with the tenant's
+    holdout settings. An advisory lock makes concurrent first users agree on one experiment."""
+    conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"{name}-exp:{tenant_id}"})
     exp: str | None = conn.execute(
         text("SELECT experiment_id FROM experiments.experiments WHERE tenant_id=:t AND name=:n AND status='running' "
-             "ORDER BY created_at LIMIT 1"), {"t": tenant_id, "n": RECOVERY_EXPERIMENT}).scalar_one_or_none()
+             "ORDER BY created_at LIMIT 1"), {"t": tenant_id, "n": name}).scalar_one_or_none()
     if exp:
         return exp
     holdout = default_holdout_bp(conn, tenant_id)
-    return create_experiment(conn, tenant_id, RECOVERY_EXPERIMENT, {"treatment": 10_000 - holdout}, holdout)
+    return create_experiment(conn, tenant_id, name, {"treatment": 10_000 - holdout}, holdout)
