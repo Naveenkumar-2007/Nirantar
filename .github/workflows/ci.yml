@@ -48,6 +48,9 @@ jobs:
       NIRANTAR_REQUIRE_SERVICES: "1"     # a missing service FAILS the run instead of skipping tests
       NIRANTAR_NO_DOTENV: "1"
       NIRANTAR_ENV: ci
+      # docker compose validates every service; Keycloak is not started in CI, these only satisfy interpolation
+      KEYCLOAK_ADMIN_PASSWORD: ci-not-started
+      NIRANTAR_DASHBOARD_CLIENT_SECRET: ci-not-started
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -143,7 +146,7 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
       - name: container scan (trivy, fixable HIGH/CRITICAL fail the build)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: nirantar-${{ matrix.name }}:ci
           severity: HIGH,CRITICAL
