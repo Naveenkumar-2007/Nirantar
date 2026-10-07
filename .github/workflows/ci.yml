@@ -47,7 +47,7 @@ jobs:
     env:
       NIRANTAR_REQUIRE_SERVICES: "1"     # a missing service FAILS the run instead of skipping tests
       NIRANTAR_NO_DOTENV: "1"
-      NIRANTAR_ENV: ci
+      NIRANTAR_ENV: test                 # dev keys are allowed only in local/test; any other value demands real secrets
       # docker compose validates every service; Keycloak is not started in CI, these only satisfy interpolation
       KEYCLOAK_ADMIN_PASSWORD: ci-not-started
       NIRANTAR_DASHBOARD_CLIENT_SECRET: ci-not-started
