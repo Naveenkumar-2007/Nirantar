@@ -104,6 +104,20 @@ class RetireIn(BaseModel):
     reason: str
 
 
+class BatchItemsIn(BaseModel):
+    item_ids: list[str] = Field(min_length=1, max_length=500)
+
+
+class BatchLaunchIn(BatchItemsIn):
+    name: str = Field(min_length=1, max_length=120)
+    holdout_pct: float = Field(default=20, ge=0, le=50)
+    window_days: int = Field(default=7, ge=1, le=30)
+
+
+class OperatorReplyBody(BaseModel):
+    text: str = Field(min_length=2, max_length=1000)
+
+
 class TemplateProposalIn(BaseModel):
     key: str
     language: str
@@ -218,6 +232,143 @@ def create_app(svc: Services | None = None) -> FastAPI:
         last_in = max((m["created_at"] for m in msgs if m["direction"] == "inbound"), default=None)
         return {"customer_id": customer_id, "display_name": cust.display_name, "language": cust.preferred_language,
                 "window_open_until": (last_in + timedelta(hours=24)) if last_in else None, "messages": msgs}
+
+    @app.post("/v1/conversations/{customer_id}/reply")
+    def conversation_reply(customer_id: str, body: OperatorReplyBody,
+                           p: Principal = Depends(require(Permission.CUSTOMERS_WRITE)),
+                           s: Services = Depends(services)) -> dict[str, Any]:
+        """Human takeover: a person answers in the inbox, through the same gateway, policy and audit as the agents."""
+        gw: ToolGateway = s.extra.get("operator_gateway") or approval_executor(s).gateway(p.tenant_id,
+                                                                                         "human_operator")
+        r = gw.call(tenant_id=p.tenant_id, agent_id="human_operator", tool_name="comms.operator_reply",
+                    args={"customer_id": customer_id, "text": body.text, "operator": _actor(p)},
+                    idempotency_key=new_id("opr"))
+        if r.status == "executed":
+            return {"status": "sent", "action_id": r.action_id, "message_id": r.output.get("provider_ref")}
+        why = [h.message for h in r.decision.hits] if r.decision else []
+        detail = r.error or r.output.get("error") or "; ".join(why) or r.status
+        if "TemplateNotApproved" in detail:
+            detail = "the customer has not written in the last 24 hours: WhatsApp allows only approved templates"
+        raise HTTPException(409, {"status": r.status, "reason": detail, "action_id": r.action_id})
+
+    # ---------------------------------------------------------------- Recovery Command Centre (P8.5, ADR-0021)
+    async def _temporal(s: Services) -> Any:
+        from temporalio.client import Client
+
+        client = s.extra.get("temporal")
+        if client is None:
+            client = s.extra["temporal"] = await Client.connect(os.environ.get("TEMPORAL_ADDRESS", "localhost:7233"))
+        return client
+
+    @app.get("/v1/recovery/queue")
+    def recovery_queue(min_risk: float = Query(0.3, ge=0.05, le=0.95), c: Connection = Depends(tenant_conn)
+                       ) -> dict[str, Any]:
+        from nirantar.recovery import queue
+
+        return queue.build(c, datetime.now(UTC), min_risk=min_risk)
+
+    @app.post("/v1/recovery/plan")
+    def recovery_plan(body: BatchItemsIn, p: Principal = Depends(require(Permission.AGENTS_OPERATE)),
+                      s: Services = Depends(services)) -> dict[str, Any]:
+        """Dry run: every message and the compliance decision for it, without sending anything."""
+        from nirantar.recovery import batch
+
+        gw: ToolGateway = s.extra.get("recovery_gateway") or approval_executor(s).gateway(p.tenant_id, batch.AGENT)
+        try:
+            return batch.plan(s.engine, gw, p.tenant_id, body.item_ids, datetime.now(UTC))
+        except batch.BatchError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post("/v1/recovery/batches")
+    async def recovery_launch(body: BatchLaunchIn, p: Principal = Depends(require(Permission.AGENTS_OPERATE)),
+                              s: Services = Depends(services)) -> dict[str, Any]:
+        import asyncio as _asyncio
+
+        from nirantar.recovery import batch
+        from nirantar.workflows import TASK_QUEUE
+        from nirantar.workflows.recovery import BatchInput, RecoveryBatchWorkflow, batch_workflow_id
+
+        try:
+            out = await _asyncio.to_thread(batch.launch, s.engine, p.tenant_id, body.item_ids, name=body.name,
+                                           holdout_bp=round(body.holdout_pct * 100), window_days=body.window_days,
+                                           actor=_actor(p), now=datetime.now(UTC))
+        except batch.BatchError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        wid = batch_workflow_id(p.tenant_id, out["batch_id"])
+        try:
+            client = await _temporal(s)
+            await client.start_workflow(RecoveryBatchWorkflow.run,
+                                        BatchInput(p.tenant_id, out["batch_id"], out["ends_at"]), id=wid,
+                                        task_queue=s.extra.get("task_queue", TASK_QUEUE))
+        except Exception as exc:     # never leave a "running" batch that nothing will run
+            reason = json.dumps({"error": f"workflow engine unavailable: {type(exc).__name__}"})
+
+            def _abort() -> None:
+                with tenant_tx(p.tenant_id, s.engine) as c:
+                    c.execute(text("UPDATE ops.recovery_batches SET status='stopped', stopped_by='system', "
+                                   "stopped_at=now(), summary = summary || CAST(:e AS jsonb) WHERE batch_id=:b"),
+                              {"e": reason, "b": out["batch_id"]})
+            await _asyncio.to_thread(_abort)
+            raise HTTPException(503, "the workflow engine is not reachable; nothing was sent") from exc
+
+        def _record() -> None:
+            with tenant_tx(p.tenant_id, s.engine) as c:
+                c.execute(text("UPDATE ops.recovery_batches SET workflow_id=:w WHERE batch_id=:b"),
+                          {"w": wid, "b": out["batch_id"]})
+                AuditChain(SqlAuditStore(c), FixedClock(datetime.now(UTC))).append(
+                    p.tenant_id, _actor(p), "recovery.batch_launched",
+                    {"batch_id": out["batch_id"], "items": len(body.item_ids), "holdout_pct": body.holdout_pct})
+        await _asyncio.to_thread(_record)
+        return {**out, "workflow_id": wid, "status": "running"}
+
+    @app.get("/v1/recovery/batches")
+    def recovery_batches(c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        from nirantar.recovery import batch
+
+        return {"items": batch.batches(c)}
+
+    @app.get("/v1/recovery/batches/{batch_id}")
+    def recovery_batch(batch_id: str, p: Principal = Depends(require(Permission.READ)),
+                       c: Connection = Depends(tenant_conn)) -> dict[str, Any]:
+        """The proof report: verified money recovered, treatment vs holdout, every action, and the audit chain."""
+        from nirantar.core.errors import AuditChainBroken
+        from nirantar.recovery import batch
+
+        try:
+            report = batch.proof(c, p.tenant_id, batch_id)
+        except batch.BatchError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        try:
+            report["audit"] = {"valid": True, "records": AuditChain(SqlAuditStore(c)).verify(p.tenant_id)}
+        except AuditChainBroken as exc:
+            report["audit"] = {"valid": False, "error": str(exc)}
+        return report
+
+    @app.post("/v1/recovery/batches/{batch_id}/stop")
+    async def recovery_stop(batch_id: str, p: Principal = Depends(require(Permission.AGENTS_OPERATE)),
+                            s: Services = Depends(services)) -> dict[str, Any]:
+        import asyncio as _asyncio
+
+        from nirantar.recovery import batch
+        from nirantar.workflows.recovery import RecoveryBatchWorkflow, batch_workflow_id
+
+        try:
+            out = await _asyncio.to_thread(batch.stop, s.engine, p.tenant_id, batch_id, _actor(p), datetime.now(UTC))
+        except batch.BatchError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        try:
+            client = await _temporal(s)
+            await client.get_workflow_handle(batch_workflow_id(p.tenant_id, batch_id)).signal(
+                RecoveryBatchWorkflow.stop)
+        except Exception:            # the DB flag alone already stops every remaining item
+            out["signal"] = "not delivered; remaining items stop at their next step"
+
+        def _record() -> None:
+            with tenant_tx(p.tenant_id, s.engine) as c:
+                AuditChain(SqlAuditStore(c), FixedClock(datetime.now(UTC))).append(
+                    p.tenant_id, _actor(p), "recovery.batch_stopped", {"batch_id": batch_id, "skipped": out["skipped"]})
+        await _asyncio.to_thread(_record)
+        return out
 
     @app.get("/v1/agents/activity")
     def activity(limit: int = Query(50, ge=1, le=MAX_LIMIT), cursor: str | None = None, agent: str | None = None,

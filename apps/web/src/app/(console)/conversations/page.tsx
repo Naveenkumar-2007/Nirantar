@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { ist } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Empty, PageHeader } from "@/components/kit";
+import { ReplyBox } from "./reply-box";
 
 type Item = { customer_id: string; display_name: string | null; preferred_language: string; direction: string; kind: string;
   status: string; last_at: string; last_inbound_at: string | null; messages: number };
@@ -89,6 +90,7 @@ export default async function ConversationsPage({ searchParams }: { searchParams
                     </div>
                   ))}
                 </div>
+                <ReplyBox customerId={thread.customer_id} windowOpen={Boolean(open)} />
               </>
             )}
           </section>

@@ -30,11 +30,13 @@ from nirantar.workflows.mandate import MandateRepairWorkflow, MandateSweepInput,
 from nirantar.workflows.mandate_activities import MandateActivities, MandateDeps
 from nirantar.workflows.platform import OnboardingWorkflow, ReconciliationSweepWorkflow, SweepInput
 from nirantar.workflows.platform_activities import PlatformActivities, PlatformDeps
+from nirantar.workflows.recovery import RecoveryBatchWorkflow
+from nirantar.workflows.recovery_activities import RecoveryActivities, RecoveryDeps
 from nirantar.workflows.revival import RevivalWorkflow
 from nirantar.workflows.revival_activities import RevivalActivities, RevivalDeps
 
 WORKFLOWS = [DebitCycleWorkflow, RevivalWorkflow, DisputeWorkflow, OnboardingWorkflow, ReconciliationSweepWorkflow,
-             MandateSweepWorkflow, MandateRepairWorkflow]
+             MandateSweepWorkflow, MandateRepairWorkflow, RecoveryBatchWorkflow]
 SWEEP_SCHEDULE_ID = "nirantar-reconciliation-sweep"
 MANDATE_SCHEDULE_ID = "nirantar-mandate-health"
 
@@ -56,7 +58,8 @@ def activities(d: WorkerDeps) -> list[Any]:
             *RevivalActivities(RevivalDeps(d.engine, d.provider, d.comms, d.environment)).all(),
             *DisputeActivities(DisputeDeps(d.engine, d.provider, d.llm, d.environment)).all(),
             *PlatformActivities(PlatformDeps(d.engine, d.provider, d.lake)).all(),
-            *MandateActivities(MandateDeps(d.engine, d.provider, d.comms, d.environment)).all()]
+            *MandateActivities(MandateDeps(d.engine, d.provider, d.comms, d.environment)).all(),
+            *RecoveryActivities(RecoveryDeps(d.engine, d.provider, d.comms, d.environment)).all()]
 
 
 def build_worker(client: Client, d: WorkerDeps, task_queue: str = TASK_QUEUE, threads: int = 16) -> Worker:

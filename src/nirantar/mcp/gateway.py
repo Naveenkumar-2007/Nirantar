@@ -91,6 +91,35 @@ class ToolGateway:
                  "input_schema": t.input_model.model_json_schema()}
                 for n, t in sorted(self.tools.items()) if n in self.agent_scopes.get(agent_id, frozenset())]
 
+    def preview(self, *, tenant_id: str, agent_id: str, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Dry run of the scope, schema and policy phases with NO writes: would this call run, need approval, or be
+        denied — and why. Same checks as `call`, so an operator's preview cannot disagree with the real run (except
+        for state that changes in between, e.g. a contact window closing)."""
+        if tool_name not in self.agent_scopes.get(agent_id, frozenset()):
+            raise ScopeError(f"agent {agent_id} is not allowed to call {tool_name}")
+        tool = self.tools[tool_name]
+        try:
+            parsed = tool.input_model.model_validate(args)
+        except ValidationError as exc:
+            return {"outcome": "INVALID", "messages": [str(exc)[:300]], "policy_ids": []}
+        ctx = ToolContext(tenant_id, agent_id, None, self.clock.now(), self.services)
+        decision: Decision | None = None
+        with tenant_tx(tenant_id, self.engine) as c:
+            if tool.policy is not None:
+                request = tool.policy(c, ctx, parsed)
+                if request is not None:
+                    decision = evaluate(ActionRequest(**{**request.__dict__, "environment": self.environment}),
+                                        self.policy_config(c, tenant_id))
+        ids = [h.policy_id for h in decision.hits] if decision else []
+        if tool.approval == "always":
+            return {"outcome": Outcome.REQUIRE_APPROVAL.value, "messages": ["always needs a person's approval"],
+                    "policy_ids": ids}
+        if decision is None:
+            return {"outcome": Outcome.ALLOW.value, "messages": [], "policy_ids": []}
+        return {"outcome": decision.outcome.value, "messages": [h.message for h in decision.hits], "policy_ids": ids,
+                "policy_version": decision.policy_version,
+                "retry_after": decision.retry_after.isoformat() if decision.retry_after else None}
+
     def call(self, *, tenant_id: str, agent_id: str, tool_name: str, args: dict[str, Any],
              case_id: str | None = None, approval_token: str | None = None,
              idempotency_key: str | None = None) -> ToolResult:

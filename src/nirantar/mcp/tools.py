@@ -334,6 +334,38 @@ def p_acknowledge(c: Connection, ctx: ToolContext, a: BaseModel) -> ActionReques
     return contact_request(c, ctx, a.customer_id, "send_whatsapp", "service", mandatory_kind=kind)
 
 
+# ---------------------------------------------------------------- human takeover (P8.5, ADR-0021)
+class OperatorReplyIn(BaseModel):
+    customer_id: str
+    text: str = Field(min_length=2, max_length=1000)
+    operator: str = Field(min_length=3, max_length=200)     # set by the API from the signed-in principal
+
+
+def h_operator_reply(ctx: ToolContext, a: BaseModel) -> dict[str, Any]:
+    """A person answers the customer in the inbox. Free text is only possible inside WhatsApp's 24-hour service
+    window (the channel refuses otherwise); any ₹ figure must equal one of the customer's unpaid debits."""
+    assert isinstance(a, OperatorReplyIn)
+    with tenant_tx(ctx.tenant_id, ctx.services["engine"]) as c:
+        unpaid = {Money(int(r.amount_minor), r.currency) for r in c.execute(text(
+            "SELECT amount_minor, currency FROM billing.debits WHERE tenant_id=:t AND customer_id=:c AND status IN "
+            "('failed','scheduled','notified','attempting')"), {"t": ctx.tenant_id, "c": a.customer_id})}
+    wrong = [str(m) for m in amounts_in_text(a.text) if m not in unpaid]
+    if wrong:
+        raise ValueError(f"message mentions {wrong}, which is not an amount this customer owes")
+    mid = ctx.services["comms"].send("whatsapp", a.customer_id, a.text, ctx.now, tenant_id=ctx.tenant_id)
+    with tenant_tx(ctx.tenant_id, ctx.services["engine"]) as c:
+        c.execute(text("INSERT INTO ops.contacts (tenant_id, contact_id, customer_id, channel, purpose, status, at) "
+                       "VALUES (:t, :i, :c, 'whatsapp', 'service', 'accepted', :n)"),
+                  {"t": ctx.tenant_id, "i": new_id("cnt"), "c": a.customer_id, "n": ctx.now})
+    return {"provider_ref": mid, "channel": "whatsapp", "operator": a.operator}
+
+
+def p_operator_reply(c: Connection, ctx: ToolContext, a: BaseModel) -> ActionRequest:
+    assert isinstance(a, OperatorReplyIn)
+    return contact_request(c, ctx, a.customer_id, "send_whatsapp", "service", a.text,
+                           mandatory_kind="reply_acknowledgement")
+
+
 # ---------------------------------------------------------------- win-back (P4, ADR-0014)
 class OfferIn(BaseModel):
     case_id: str = Field(pattern=r"^cas_[A-Za-z0-9_]+$")
@@ -711,6 +743,8 @@ TOOLS: dict[str, Tool] = {t.name: t for t in (
          "inside the pause (customer-delegated).", PauseIn, h_request_pause, "write", policy=p_customer_request),
     Tool("treasury.request_credit_draw", "Request a credit-line draw to cover a projected shortfall (always human-"
          "approved).", CreditDrawIn, h_credit_draw, "money", approval="always"),
+    Tool("comms.operator_reply", "A person's reply to the customer inside the WhatsApp service window.",
+         OperatorReplyIn, h_operator_reply, "write", idempotent=False, policy=p_operator_reply),
 )}
 
 AGENT_SCOPES: dict[str, frozenset[str]] = {
@@ -725,4 +759,8 @@ AGENT_SCOPES: dict[str, frozenset[str]] = {
     "mandate_doctor": frozenset({"mandate.send_repair", "customer.get_profile"}),
     "revival_agent": frozenset({"content.get_template", "customer.get_profile", "retention.create_offer",
                                 "comms.send_winback", "experiment.assign_treatment", "experiment.log_exposure"}),
+    # an operator-launched recovery batch (P8.5): the same tools the agents use, never more
+    "recovery_batch": frozenset({"gateway.create_payment_link", "comms.send_whatsapp", "mandate.send_repair",
+                                 "comms.send_predebit_notice", "customer.get_profile"}),
+    "human_operator": frozenset({"comms.operator_reply"}),
 }

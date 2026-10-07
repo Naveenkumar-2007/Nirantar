@@ -158,4 +158,7 @@ history import via OnboardingWorkflow, team invites (verified email only), busin
 P8.3 design system: shadcn (radix, nova) on one token set with validated chart palettes for light and dark,
 sidebar shell with business switcher and theme menu, status shown with mark + word; Customers, Customer 360 and
 a Conversations inbox (WhatsApp bodies encrypted with the tenant key, migration 0022) — ADR-0020.
-Next: P8.4 public URL (inbound webhooks), P8.5 billing/site/docs, P8.6 CI + Playwright + 72 h soak + Helm.
+P8.5 Recovery Command Centre: computed queue (declines, M1 at-risk, mandate cases) with own-history expected ₹,
+gateway dry-run preview, operator batches = experiments with a randomised holdout (RecoveryBatchWorkflow, stop,
+window retries), verified proof report, human inbox replies via comms.operator_reply — ADR-0021.
+Next: P8.4 public URL (inbound webhooks), P9 multi-agent v2, P10 new recovery fronts, P8.6 CI + soak + Helm.

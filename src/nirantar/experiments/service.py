@@ -174,8 +174,14 @@ def analyze(conn: Connection, tenant_id: str, experiment_id: str, min_per_arm: i
     per: dict[str, list[tuple[bool, int]]] = {}
     for r in rows:
         per.setdefault(r.arm, []).append((bool(r.success), int(r.value)))
+    return {"experiment_id": experiment_id, **incremental(per, min_per_arm)}
+
+
+def incremental(per: dict[str, list[tuple[bool, int]]], min_per_arm: int = 30) -> dict[str, Any]:
+    """Per-arm rate and ₹ from units (success, value), and each arm's increment over the holdout with 95% CIs.
+    Shared by experiments and recovery batches so every proof in the product uses the same statistics."""
     stats = {arm: ArmStats(arm, len(v), sum(s for s, _ in v), sum(x for _, x in v)) for arm, v in per.items()}
-    result: dict[str, Any] = {"experiment_id": experiment_id, "arms": {
+    result: dict[str, Any] = {"arms": {
         a: {"n": s.n, "recovery_rate": s.rate, "value_minor": s.value_minor} for a, s in stats.items()}}
     control = stats.get(HOLDOUT)
     if control is None or control.n < min_per_arm:
