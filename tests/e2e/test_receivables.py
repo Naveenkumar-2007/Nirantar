@@ -174,7 +174,7 @@ async def test_invoice_ladder_partial_payments_approval_dispute_and_ageing(app_e
                 "SELECT step, detail FROM ops.invoice_chases WHERE invoice_id=:i AND status='denied'"),
                 {"i": ids["INV-Y"]})}
         assert all(any("contact budget" in msg for msg in d["messages"]) for d in refused.values())
-        assert sum(st == "executed" for st in y_steps.values()) >= 3
+        assert sum(st in ("executed", "bundled") for st in y_steps.values()) >= 3   # bundled = in the statement
         assert "final" not in steps("INV-X") and set(steps("INV-Z")) <= {"reminder"}
         with tenant_tx(t, app_engine) as c:
             case = c.execute(text("SELECT kind, status FROM ops.cases WHERE subject_id=:i"), {"i": ids["INV-Y"]}).one()

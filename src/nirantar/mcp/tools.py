@@ -789,6 +789,131 @@ def p_checkout_recovery(c: Connection, ctx: ToolContext, a: BaseModel) -> Action
     return contact_request(c, ctx, cust, "send_whatsapp", "promotional")
 
 
+class MandateChargeIn(BaseModel):
+    debit_id: str = Field(pattern=r"^dbt_[0-9A-Z]{26}$")
+    attempt: int = Field(ge=1, le=5)
+
+
+def _attempt_debit(c: Connection, tenant_id: str, debit_id: str) -> Any:
+    return c.execute(text(
+        "SELECT d.debit_id, d.customer_id, d.amount_minor, d.currency, d.status, d.predebit_notified_at, "
+        "s.collection_method, s.mandate_id FROM billing.debits d JOIN billing.subscriptions s ON "
+        "s.tenant_id=d.tenant_id AND s.subscription_id=d.subscription_id WHERE d.tenant_id=:t AND d.debit_id=:d"),
+        {"t": tenant_id, "d": debit_id}).one()
+
+
+def h_mandate_notice(ctx: ToolContext, a: BaseModel) -> dict[str, Any]:
+    """The mandatory pre-debit notice for a planned retry: the exact amount and the date it will be charged."""
+    assert isinstance(a, MandateChargeIn)
+    from zoneinfo import ZoneInfo
+
+    engine = ctx.services["engine"]
+    with tenant_tx(ctx.tenant_id, engine) as c:
+        d = _attempt_debit(c, ctx.tenant_id, a.debit_id)
+        att = c.execute(text("SELECT planned_for, status FROM billing.debit_attempts WHERE tenant_id=:t AND "
+                             "debit_id=:d AND attempt=:a"), {"t": ctx.tenant_id, "d": a.debit_id, "a": a.attempt}
+                        ).one_or_none()
+        if att is None or att.status not in ("planned", "notified"):
+            raise ValueError("no planned retry for this attempt")
+        cust = _customer(c, ctx.tenant_id, d.customer_id)
+        channel = notice_channel(ctx.services)
+        lang = cust.preferred_language or "en"
+        tpl = templates.resolve(c, ctx.tenant_id, f"{channel}.predebit_notice", lang)
+    when = att.planned_for.astimezone(ZoneInfo("Asia/Kolkata"))
+    values = {"amount": rupees(Money(int(d.amount_minor), d.currency)), "date": f"{when:%d %b %Y}",
+              "plan": "subscription"}
+    body = tpl.render(**values)
+    mid = ctx.services["comms"].send(channel, d.customer_id, body, ctx.now, tenant_id=ctx.tenant_id,
+                                     template=OutboundTemplate(f"{channel}.predebit_notice", lang, values))
+    with tenant_tx(ctx.tenant_id, engine) as c:
+        c.execute(text("INSERT INTO ops.contacts (tenant_id, contact_id, customer_id, channel, purpose, status, at) "
+                       "VALUES (:t, :i, :c, :ch, 'mandatory', 'accepted', :n)"),
+                  {"t": ctx.tenant_id, "i": new_id("cnt"), "c": d.customer_id, "ch": channel, "n": ctx.now})
+        c.execute(text("UPDATE billing.debit_attempts SET status='notified', notice_sent_at=:n, updated_at=:n WHERE "
+                       "tenant_id=:t AND debit_id=:d AND attempt=:a AND status='planned'"),
+                  {"n": ctx.now, "t": ctx.tenant_id, "d": a.debit_id, "a": a.attempt})
+    return {"provider_ref": mid, "channel": channel, "text": body, "charge_on": when.date().isoformat()}
+
+
+def p_mandate_notice(c: Connection, ctx: ToolContext, a: BaseModel) -> ActionRequest:
+    assert isinstance(a, MandateChargeIn)
+    d = _attempt_debit(c, ctx.tenant_id, a.debit_id)
+    action = "send_sms" if notice_channel(ctx.services) == "sms" else "send_whatsapp"
+    return contact_request(c, ctx, d.customer_id, action, "mandatory", mandatory_kind="predebit_notice")
+
+
+def h_mandate_charge(ctx: ToolContext, a: BaseModel) -> dict[str, Any]:
+    """Charge a mandate debit for attempt N — the debit's own amount, on its own mandate, once. Refused unless the
+    mandate is active and covers the amount, the attempt is within the cap, and the customer was notified at least
+    24 hours earlier (RBI e-mandate framework)."""
+    assert isinstance(a, MandateChargeIn)
+    from nirantar.core import crypto
+    from nirantar.mandates.retry import MAX_ATTEMPTS
+    from nirantar.payments.domain import ProviderRejected
+
+    if a.attempt > MAX_ATTEMPTS:
+        raise ValueError(f"attempt {a.attempt} is over the cap of {MAX_ATTEMPTS}")
+    engine = ctx.services["engine"]
+    with tenant_tx(ctx.tenant_id, engine) as c:
+        d = _attempt_debit(c, ctx.tenant_id, a.debit_id)
+        if d.status == "succeeded":
+            raise ValueError("debit is already paid")
+        if d.collection_method != "mandate" or not d.mandate_id:
+            raise ValueError("this debit is not collected by mandate")
+        m = c.execute(text("SELECT * FROM billing.mandates WHERE tenant_id=:t AND mandate_id=:m"),
+                      {"t": ctx.tenant_id, "m": d.mandate_id}).one()
+        if m.status != "active":
+            raise ValueError(f"mandate is {m.status}; not charged")
+        if m.valid_until is not None and m.valid_until < ctx.now.date():
+            raise ValueError("mandate has expired; not charged")
+        if m.max_amount_minor is None:
+            raise ValueError("the mandate's limit is unknown; not charged until the provider confirms it")
+        if int(d.amount_minor) > int(m.max_amount_minor):
+            raise ValueError("amount is above the mandate limit; not charged")
+        if a.attempt == 1:
+            c.execute(text("INSERT INTO billing.debit_attempts (tenant_id, debit_id, attempt, kind, planned_for, "
+                           "reason, notice_sent_at, status, created_at, updated_at) VALUES (:t, :d, 1, 'initial', :n, "
+                           "'due date', :ns, CASE WHEN CAST(:ns AS timestamptz) IS NULL THEN 'planned' ELSE "
+                           "'notified' END, :n, :n) ON CONFLICT DO NOTHING"),
+                      {"t": ctx.tenant_id, "d": a.debit_id, "n": ctx.now, "ns": d.predebit_notified_at})
+        att = c.execute(text("SELECT * FROM billing.debit_attempts WHERE tenant_id=:t AND debit_id=:d AND attempt=:a "
+                             "FOR UPDATE"), {"t": ctx.tenant_id, "d": a.debit_id, "a": a.attempt}).one_or_none()
+        if att is None:
+            raise ValueError("no planned attempt")
+        if att.status in ("charging", "captured", "failed"):
+            return {"charged": False, "already": att.status, "provider_payment_id": att.provider_payment_id}
+        if att.notice_sent_at is None or ctx.now - att.notice_sent_at < timedelta(hours=24):
+            raise ValueError("the pre-debit notice must reach the customer at least 24 hours before a charge")
+        c.execute(text("UPDATE billing.debit_attempts SET status='charging', charged_at=:n, updated_at=:n WHERE "
+                       "tenant_id=:t AND debit_id=:d AND attempt=:a"),
+                  {"n": ctx.now, "t": ctx.tenant_id, "d": a.debit_id, "a": a.attempt})
+        cust = c.execute(text("SELECT phone_enc, email_enc FROM billing.customers WHERE tenant_id=:t AND "
+                              "customer_id=:c"), {"t": ctx.tenant_id, "c": d.customer_id}).one()
+    charge = getattr(ctx.services["provider"], "charge_mandate", None)
+    if charge is None:
+        raise ValueError("this provider cannot charge mandates")
+    try:
+        pay = charge(token_ref=m.provider_token_id, customer_ref=m.provider_customer_ref,
+                     amount=Money(int(d.amount_minor), d.currency), receipt=f"{a.debit_id}.a{a.attempt}",
+                     notes={"nirantar_ref": a.debit_id, "attempt": str(a.attempt)},
+                     contact=crypto.decrypt(bytes(cust.phone_enc), ctx.tenant_id) if cust.phone_enc else None,
+                     email=crypto.decrypt(bytes(cust.email_enc), ctx.tenant_id) if cust.email_enc else None,
+                     at=ctx.now)
+    except ProviderRejected as exc:
+        with tenant_tx(ctx.tenant_id, engine) as c:
+            c.execute(text("UPDATE billing.debit_attempts SET status='failed', reason=reason || '; provider "
+                           "refused: ' || :e, updated_at=:n WHERE tenant_id=:t AND debit_id=:d AND attempt=:a"),
+                      {"e": str(exc)[:200], "n": ctx.now, "t": ctx.tenant_id, "d": a.debit_id, "a": a.attempt})
+        return {"charged": False, "error": str(exc)[:200]}
+    with tenant_tx(ctx.tenant_id, engine) as c:
+        c.execute(text("UPDATE billing.debit_attempts SET provider_payment_id=:pp, provider_order_id=:o, updated_at=:n "
+                       "WHERE tenant_id=:t AND debit_id=:d AND attempt=:a"),
+                  {"pp": pay.provider_payment_id or None, "o": pay.order_ref, "n": ctx.now, "t": ctx.tenant_id,
+                   "d": a.debit_id, "a": a.attempt})
+    return {"charged": True, "provider_ref": pay.provider_payment_id, "order_id": pay.order_ref,
+            "amount_minor": int(d.amount_minor), "attempt": a.attempt}
+
+
 # ---------------------------------------------------------------- human takeover (P8.5, ADR-0021)
 class OperatorReplyIn(BaseModel):
     customer_id: str
@@ -1212,6 +1337,10 @@ TOOLS: dict[str, Tool] = {t.name: t for t in (
     Tool("billing.send_checkout_recovery", "Remind a customer about a checkout they did not complete, with a "
          "secure payment link for exactly the checkout's amount.", CheckoutStepIn, h_checkout_recovery, "money",
          policy=p_checkout_recovery),
+    Tool("mandate.notify_retry", "Send the mandatory pre-debit notice for a planned mandate retry (amount and date).",
+         MandateChargeIn, h_mandate_notice, "write", policy=p_mandate_notice),
+    Tool("mandate.charge_debit", "Charge a mandate debit once for an attempt: its own amount, its own mandate, "
+         "24h after the notice, within the attempt cap.", MandateChargeIn, h_mandate_charge, "money"),
     Tool("billing.send_final_notice", "Send the final notice for an overdue invoice (always approved by a person).",
          InvoiceStepIn, h_invoice_request, "money", policy=p_invoice_request, approval="always"),
     Tool("comms.place_call", "Place an outbound recovery call (Exotel, the customer's language; recording disclosed "
@@ -1243,4 +1372,5 @@ AGENT_SCOPES: dict[str, frozenset[str]] = {
                                     "customer.get_profile"}),
     "billing_agent": frozenset({"billing.send_payment_request", "comms.send_receipt", "customer.get_profile"}),
     "checkout_agent": frozenset({"billing.send_checkout_recovery", "customer.get_profile"}),
+    "retry_sequencer": frozenset({"mandate.notify_retry", "mandate.charge_debit"}),
 }

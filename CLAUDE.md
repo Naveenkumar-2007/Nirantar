@@ -178,6 +178,9 @@ Gateway: same idempotency key → advisory lock + 'executing' lease, so a concur
 Checkout recovery (ADR-0028): store events (POST /v1/checkout/events, `checkout_ingest` key only) + provider
 webhooks → CheckoutRecoveryWorkflow (30-min quiet → diagnose cause → holdout → one cause-worded reminder + ≤1 follow-up,
 exact cart amount, WhatsApp+promotional consent) → verified recovery-link payment booked once; ≥₹10k → a person.
+Mandate collection (ADR-0029): plans may collect by mandate (active, limit-covering mandate required);
+mandate.charge_debit (retry_sequencer only: ≥24h after notice, ≤3 attempts, debit's own amount, receipt <debit>.a<n>);
+mandates/retry.py plans retries only for BANK_TECHNICAL / INSUFFICIENT_FUNDS, 06:00-09:00 IST; billing.debit_attempts.
 Demo (deploy/space, Dockerfile): whole stack in one container on :7860, NIRANTAR_DEMO=1 (mock only, refuses real
 credentials); CI .github/workflows/ci.yml; deploy-huggingface.yml → private Space Naveen-2007/nirantar.
 Live voice (ADR-0026): comms.place_call (Exotel connect-to-flow, voice_call policy incl. registered header), signed

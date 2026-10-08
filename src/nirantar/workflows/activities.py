@@ -27,7 +27,11 @@ from nirantar.ml.router import ModelRouter
 from nirantar.outcomes.service import close_cycle
 from nirantar.payments.domain import PaymentProvider
 from nirantar.payments.providers.resolver import ProviderResolver, provider_for
-from nirantar.payments.reconciliation import reconcile_open_debits, reconcile_payment_requests
+from nirantar.payments.reconciliation import (
+    reconcile_mandate_attempts,
+    reconcile_open_debits,
+    reconcile_payment_requests,
+)
 from nirantar.settings import runtime as tenant_runtime
 from nirantar.voice.exotel import default_client as default_voice
 from nirantar.workflows.types import StepInput
@@ -175,8 +179,10 @@ class DebitActivities:
                                        clock=FixedClock(self._now(step)))
         links = reconcile_payment_requests(self.d.engine, provider, c_.tenant_id, debit_id=c_.debit_id,
                                            clock=FixedClock(self._now(step)))
-        report.scanned += links.scanned
-        report.changed += links.changed
+        mandate = reconcile_mandate_attempts(self.d.engine, provider, c_.tenant_id, debit_id=c_.debit_id,
+                                             clock=FixedClock(self._now(step)))
+        report.scanned += links.scanned + mandate.scanned
+        report.changed += links.changed + mandate.changed
         with tenant_tx(c_.tenant_id, self.d.engine) as c:
             status: str = c.execute(text("SELECT status FROM billing.debits WHERE tenant_id=:t AND debit_id=:d"),
                                {"t": c_.tenant_id, "d": c_.debit_id}).scalar_one()
@@ -189,6 +195,12 @@ class DebitActivities:
         send the payment request through the gateway (policy: consent, contact window, fatigue)."""
         c_ = step.cycle
         method = self._method(c_.tenant_id, c_.debit_id)
+        if method == "mandate":                  # Nirantar charges the mandate itself (ADR-0029): attempt 1
+            r = self._gateway(step).call(tenant_id=c_.tenant_id, agent_id="retry_sequencer",
+                                         tool_name="mandate.charge_debit", args={"debit_id": c_.debit_id, "attempt": 1},
+                                         case_id=step.case_id, idempotency_key=f"mandate-charge:{c_.debit_id}:1")
+            return {"method": method, "status": r.status, "charged": r.output.get("charged"),
+                    "error": r.error or r.output.get("error")}
         if method != "payment_link":
             return {"method": method, "status": "provider_charges"}
         r = self._gateway(step).call(tenant_id=c_.tenant_id, agent_id="billing_agent",
@@ -211,6 +223,62 @@ class DebitActivities:
         event = {"event_type": "payment.captured"} if status == "succeeded" else None
         return {"scanned": report.scanned, "errors": report.errors[:3], "debit_status": status,
                 "payment_event": event}
+
+    @activity.defn(name="plan_retry")
+    def plan_retry(self, step: StepInput) -> dict[str, Any]:
+        """Mandate retry sequencer (ADR-0029): diagnose the latest failed charge, decide whether and when to retry,
+        record the plan, and send the mandatory pre-debit notice now (the charge is ≥24h later)."""
+        from nirantar.agents.failure_triage import RULES
+        from nirantar.health.monitor import degraded_for
+        from nirantar.mandates import retry
+
+        c_ = step.cycle
+        now = self._now(step)
+        if self._method(c_.tenant_id, c_.debit_id) != "mandate":
+            return {"retry": False, "reason": "not collected by mandate"}
+        with tenant_tx(c_.tenant_id, self.d.engine) as c:
+            last = c.execute(text("SELECT method, issuer, error_reason, coalesce(provider_created_at, created_at) "
+                                  "AS at FROM billing.payments WHERE tenant_id=:t AND debit_id=:d AND "
+                                  "status='failed' ORDER BY coalesce(provider_created_at, created_at) DESC LIMIT 1"),
+                             {"t": c_.tenant_id, "d": c_.debit_id}).first()
+            made = int(c.execute(text("SELECT count(*) FROM billing.debit_attempts WHERE tenant_id=:t AND debit_id=:d "
+                                      "AND status IN ('charging','captured','failed')"),
+                                 {"t": c_.tenant_id, "d": c_.debit_id}).scalar_one())
+            incident = degraded_for(c, last.method, last.issuer, last.at) if last else None
+        reason = ((last.error_reason if last else None) or step.payload.get("error_reason") or "").strip().lower()
+        category = "BANK_TECHNICAL" if incident else RULES.get(reason, "UNKNOWN")
+        plan = retry.plan(category, max(made, 1), now, bank_incident_open=incident is not None)
+        if plan.charge_at is None:
+            return {"retry": False, "reason": plan.reason, "category": category}
+        with tenant_tx(c_.tenant_id, self.d.engine) as c:
+            c.execute(text("INSERT INTO billing.debit_attempts (tenant_id, debit_id, attempt, kind, planned_for, "
+                           "reason, failure_category, status, created_at, updated_at) VALUES (:t, :d, :a, 'retry', "
+                           ":p, :r, :fc, 'planned', :n, :n) ON CONFLICT DO NOTHING"),
+                      {"t": c_.tenant_id, "d": c_.debit_id, "a": plan.attempt, "p": plan.charge_at, "r": plan.reason,
+                       "fc": category, "n": now})
+        notice = self._gateway(step).call(tenant_id=c_.tenant_id, agent_id="retry_sequencer",
+                                          tool_name="mandate.notify_retry",
+                                          args={"debit_id": c_.debit_id, "attempt": plan.attempt}, case_id=step.case_id,
+                                          idempotency_key=f"mandate-notice:{c_.debit_id}:{plan.attempt}")
+        if notice.status != "executed":       # no notice → no charge: the customer is contacted instead
+            with tenant_tx(c_.tenant_id, self.d.engine) as c:
+                c.execute(text("UPDATE billing.debit_attempts SET status='cancelled', reason=reason || '; notice not "
+                               "sent', updated_at=:n WHERE tenant_id=:t AND debit_id=:d AND attempt=:a"),
+                          {"n": now, "t": c_.tenant_id, "d": c_.debit_id, "a": plan.attempt})
+            return {"retry": False, "reason": f"pre-debit notice not sent ({notice.status})", "category": category}
+        return {"retry": True, "attempt": plan.attempt, "charge_at": plan.charge_at.isoformat(), "reason": plan.reason,
+                "category": category}
+
+    @activity.defn(name="retry_charge")
+    def retry_charge(self, step: StepInput) -> dict[str, Any]:
+        c_ = step.cycle
+        attempt = int(step.payload["attempt"])
+        r = self._gateway(step).call(tenant_id=c_.tenant_id, agent_id="retry_sequencer",
+                                     tool_name="mandate.charge_debit", args={"debit_id": c_.debit_id,
+                                                                             "attempt": attempt},
+                                     case_id=step.case_id, idempotency_key=f"mandate-charge:{c_.debit_id}:{attempt}")
+        return {"status": r.status, "charged": bool(r.output.get("charged")), "error": r.error or r.output.get("error"),
+                "provider_ref": r.output.get("provider_ref")}
 
     @activity.defn(name="handle_failure")
     def handle_failure(self, step: StepInput) -> dict[str, Any]:
@@ -337,4 +405,4 @@ class DebitActivities:
     def all(self) -> list[Any]:
         return [self.open_case, self.predict_risk, self.pre_debit, self.mark_attempting, self.reconcile, self.collect,
                 self.poll_link, self.handle_failure, self.record_reply, self.promise_remind, self.promise_resolve,
-                self.verify_and_close]
+                self.verify_and_close, self.plan_retry, self.retry_charge]

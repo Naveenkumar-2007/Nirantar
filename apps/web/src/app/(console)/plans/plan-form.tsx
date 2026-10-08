@@ -29,7 +29,7 @@ export function PlanForm() {
       <div className="space-y-1"><Label htmlFor="pm">Collect by</Label>
         <select id="pm" name="method" className={select} defaultValue="payment_link">
           <option value="payment_link">Payment link on each due date (works with every account)</option>
-          <option value="mandate" disabled>UPI AutoPay / e-mandate (coming soon)</option>
+          <option value="mandate">UPI AutoPay / e-mandate (customers need an active mandate)</option>
         </select></div>
       <div className="space-y-1"><Label htmlFor="pd">Description (optional)</Label>
         <Input id="pd" name="description" maxLength={300} placeholder="2 cups a day, delivered" /></div>

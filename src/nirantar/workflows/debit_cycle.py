@@ -21,6 +21,7 @@ with workflow.unsafe.imports_passed_through():
 
 PAY_BY_LINK = "pay-by-link-collection-v1"          # P8.6: patched in; replay-safe for histories recorded before
 PROMISES = "promise-to-pay-v1"                       # P10: honour a customer's promised date
+MANDATE_RETRY = "mandate-retry-v1"                   # ADR-0029: reason-aware mandate retries before contact rounds
 PROMISE_MAX = timedelta(days=30)
 LINK_POLL = timedelta(minutes=30)
 COLLECT_TRIES = 3
@@ -143,6 +144,34 @@ class DebitCycleWorkflow:
             return True
         return True
 
+    async def _mandate_retries(self, inp: CycleInput, case_id: str, failure: dict[str, Any]) -> dict[str, Any]:
+        """Retry a failed mandate debit only when the reason says it can succeed, each after a pre-debit notice and
+        within the cap (the planner decides; ADR-0029). Returns the latest failure for the contact rounds."""
+        while not self._captured:
+            self.stage = "planning_retry"
+            plan = await self._act("plan_retry", self._step(inp, case_id, error_code=failure.get("error_code"),
+                                                            error_reason=failure.get("error_reason")))
+            if not plan.get("retry"):
+                return failure
+            self.stage = "retry_scheduled"
+            await self._wait(datetime.fromisoformat(plan["charge_at"]), inp, case_id)
+            if self._captured:
+                return failure
+            self._payment = None
+            self.stage = "retrying"
+            charged = await self._act("retry_charge", self._step(inp, case_id, attempt=plan["attempt"]))
+            if not charged.get("charged"):
+                return failure
+            try:
+                await workflow.wait_condition(lambda: self._payment is not None,
+                                              timeout=timedelta(hours=inp.payment_wait_hours))
+            except TimeoutError:
+                recon = await self._act("reconcile", self._step(inp, case_id))
+                if recon.get("payment_event"):
+                    self.payment_update(recon["payment_event"])
+            failure = self._payment or failure
+        return failure
+
     # ---- run ------------------------------------------------------------------------
     @workflow.run
     async def run(self, inp: CycleInput) -> dict[str, Any]:
@@ -199,6 +228,8 @@ class DebitCycleWorkflow:
             outcome = "paid_on_time"
         else:
             failure = self._payment or {"event_type": "payment.unknown", "error_code": None, "error_reason": None}
+            if workflow.patched(MANDATE_RETRY):
+                failure = await self._mandate_retries(inp, case_id, failure)
             deadline = workflow.now() + timedelta(days=inp.recovery_window_days)
             rounds = 0
             while not self._captured and workflow.now() < deadline:

@@ -72,6 +72,10 @@ class MockProvider:
         self.links: dict[str, PaymentLink] = {}
         self.link_payments: dict[str, list[str]] = {}
         self.orders: dict[str, CheckoutOrder] = {}
+        # scripted outcomes for merchant-initiated mandate charges: (succeed, error_reason) popped in order;
+        # empty → the charge succeeds
+        self.mandate_outcomes: list[tuple[bool, str | None]] = []
+        self.mandate_charges: list[dict[str, Any]] = []
         self.order_payments: dict[str, list[str]] = {}
         self.checkout_key = "rzp_test_mock"
         self.refunds: dict[str, Refund] = {}
@@ -156,6 +160,32 @@ class MockProvider:
         )
         self.payments[pay.provider_payment_id] = pay
         sub.payments.append(pay.provider_payment_id)
+        return pay
+
+    def charge_mandate(self, *, token_ref: str, customer_ref: str | None, amount: Money, receipt: str,
+                       notes: Mapping[str, str], contact: str | None = None, email: str | None = None,
+                       at: datetime | None = None) -> ProviderPayment:
+        """A merchant-initiated charge on a mandate (Razorpay: order + recurring payment on the token). The bank's
+        answer is scripted by `mandate_outcomes`; a revoked/expired mandate or an amount over its limit is refused
+        like the provider would."""
+        if any(c["receipt"] == receipt for c in self.mandate_charges):
+            raise ProviderRejected(f"duplicate receipt {receipt}")
+        m = self.mandates.get(token_ref)
+        if m is None or m.status != "active":
+            raise ProviderRejected("mandate is not active")
+        if m.max_amount is not None and amount.minor > m.max_amount.minor:
+            raise ProviderRejected("amount exceeds the mandate limit")
+        order = self.create_order(amount, receipt, notes)
+        succeed, reason = self.mandate_outcomes.pop(0) if self.mandate_outcomes else (True, None)
+        pay = ProviderPayment("mock", self._next("pay"), amount,
+                              PaymentStatus.CAPTURED if succeed else PaymentStatus.FAILED, "upi",
+                              None if succeed else "BAD_REQUEST_ERROR", None if succeed else (reason or "timeout"),
+                              at or datetime.now(UTC), customer_ref=customer_ref, order_ref=order.order_id,
+                              notes=dict(notes), token_ref=token_ref)
+        self.payments[pay.provider_payment_id] = pay
+        self.order_payments.setdefault(order.order_id, []).append(pay.provider_payment_id)
+        self.mandate_charges.append({"receipt": receipt, "token": token_ref, "amount_minor": amount.minor,
+                                     "payment_id": pay.provider_payment_id})
         return pay
 
     def open_dispute(self, provider_payment_id: str, reason_code: str = "fraudulent",

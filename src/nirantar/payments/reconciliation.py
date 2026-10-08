@@ -52,6 +52,39 @@ def reconcile_window(engine: Engine, provider: PaymentProvider, tenant_id: str, 
     return report
 
 
+def reconcile_mandate_attempts(engine: Engine, provider: PaymentProvider, tenant_id: str,
+                               debit_id: str | None = None, clock: Clock | None = None) -> ReconReport:
+    """Nirantar's own mandate charges still 'charging' (no webhook yet): ask the provider for the order's payments
+    (or the payment itself) and apply them through the same verified path as a webhook (ADR-0029)."""
+    report = ReconReport()
+    now = (clock or SystemClock()).now()
+    with tenant_tx(tenant_id, engine) as c:
+        rows = c.execute(text(
+            "SELECT debit_id, attempt, provider_order_id, provider_payment_id FROM billing.debit_attempts WHERE "
+            "tenant_id=:t AND status='charging' AND (CAST(:d AS text) IS NULL OR debit_id=:d)"),
+            {"t": tenant_id, "d": debit_id}).all()
+    fetch_order = getattr(provider, "fetch_order_payments", None)
+    for r in rows:
+        try:
+            if r.provider_order_id and fetch_order is not None:
+                payments = fetch_order(r.provider_order_id)
+            elif r.provider_payment_id:
+                payments = [provider.fetch_payment(r.provider_payment_id)]
+            else:
+                continue
+        except ProviderError as exc:
+            report.errors.append(f"{r.debit_id}#{r.attempt}: {exc}")
+            continue
+        for p in payments:
+            report.scanned += 1
+            with tenant_tx(tenant_id, engine) as c:
+                outcome = apply_payment(c, tenant_id, provider, p, now, None, clock)
+            if outcome.event_type:
+                report.changed += 1
+                report.events.append(outcome.event_type)
+    return report
+
+
 def reconcile_open_debits(engine: Engine, provider: PaymentProvider, tenant_id: str, stale_after: timedelta,
                           clock: Clock | None = None) -> ReconReport:
     """Debits stuck in 'attempting' with no webhook: pull their subscription's payments directly."""

@@ -28,7 +28,7 @@ from nirantar.core.money import Money
 INTERVALS = ("weekly", "monthly", "quarterly", "yearly")
 METHODS = ("payment_link", "mandate", "provider_subscription")
 NIRANTAR_RUN = ("payment_link", "mandate")       # methods where Nirantar, not the provider, creates the debits
-AVAILABLE = ("payment_link",)                    # mandate charging is not built yet: never offer what cannot collect
+AVAILABLE = ("payment_link", "mandate")         # mandate: Nirantar charges the token itself (ADR-0029)
 HORIZON_DAYS = 3                                  # debits exist from T-3, when the workflow predicts and notifies
 MAX_CATCH_UP = 3                                  # a sweep never creates more than this many debits per subscription
 
@@ -64,8 +64,7 @@ def create_plan(conn: Connection, tenant_id: str, p: NewPlan, actor: str) -> str
     if p.collection_method not in METHODS:
         raise PlanError(f"collection method must be one of {METHODS}")
     if p.collection_method not in AVAILABLE:
-        raise PlanError("UPI AutoPay / e-mandate collection is not available yet: Nirantar does not charge mandate "
-                        "tokens until the provider's recurring-payments feature is enabled and integrated")
+        raise PlanError("provider-run subscriptions are created at the provider and imported, not planned here")
     if p.amount.currency != "INR" or not 100 <= p.amount.minor <= 10_000_000:      # ₹1 – ₹1,00,000
         raise PlanError("amount must be between ₹1 and ₹1,00,000")
     if conn.execute(text("SELECT 1 FROM billing.plans WHERE lower(name)=lower(:n) AND active"), {"n": name}).first():
@@ -109,12 +108,29 @@ def enroll(conn: Connection, tenant_id: str, customer_id: str, plan_id: str, sta
                             {"t": tenant_id}).scalar_one_or_none()
     if provider is None:
         raise PlanError("connect a payment provider first")
+    mandate_id = None
+    if method == "mandate":
+        # only a mandate the provider has confirmed, still valid at the first charge, and covering the amount
+        m = conn.execute(text(
+            "SELECT mandate_id, provider, max_amount_minor, valid_until FROM billing.mandates WHERE customer_id=:c "
+            "AND status='active' AND provider_token_id IS NOT NULL ORDER BY created_at DESC LIMIT 1"),
+            {"c": customer_id}).one_or_none()
+        if m is None:
+            raise PlanError("this customer has no active UPI AutoPay / e-mandate: send them a mandate registration "
+                            "link first, or collect by payment link")
+        if m.max_amount_minor is None:
+            raise PlanError("the mandate's limit is not known yet: verify it with the provider before enrolling")
+        if int(m.max_amount_minor) < int(plan.amount_minor):
+            raise PlanError("the customer's mandate limit is below this plan's amount")
+        if m.valid_until is not None and m.valid_until < start_on:
+            raise PlanError("the customer's mandate expires before the first charge")
+        mandate_id, provider = m.mandate_id, m.provider
     sid = new_id("sub")
     conn.execute(text("INSERT INTO billing.subscriptions (tenant_id, subscription_id, customer_id, provider, "
-                      "amount_minor, currency, interval, status, next_charge_on, plan_id, collection_method) "
-                      "VALUES (:t, :s, :c, :pr, :a, 'INR', :i, 'active', :n, :p, :m)"),
+                      "amount_minor, currency, interval, status, next_charge_on, plan_id, collection_method, "
+                      "mandate_id) VALUES (:t, :s, :c, :pr, :a, 'INR', :i, 'active', :n, :p, :m, :md)"),
                  {"t": tenant_id, "s": sid, "c": customer_id, "pr": provider, "a": plan.amount_minor,
-                  "i": plan.interval, "n": start_on, "p": plan_id, "m": method})
+                  "i": plan.interval, "n": start_on, "p": plan_id, "m": method, "md": mandate_id})
     created = ensure_debits(conn, tenant_id, now.date(), now, subscription_id=sid)
     return {"subscription_id": sid, "collection_method": method, "next_charge_on": start_on.isoformat(),
             "debits_created": created}

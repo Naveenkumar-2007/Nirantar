@@ -45,7 +45,11 @@ def _lister(provider: PaymentProvider) -> Any:
 
 def upsert_mandate(conn: Connection, tenant_id: str, m: ProviderMandate, customer_id: str, now: datetime,
                    *, raw_event_id: str | None = None, clock: Clock | None = None) -> MandateChange:
-    mid = mandate_id_for(tenant_id, m.provider, m.provider_token_id)
+    # a token already on record (e.g. imported or registered before discovery existed) keeps its mandate id
+    known = conn.execute(text("SELECT mandate_id FROM billing.mandates WHERE tenant_id=:t AND provider=:p AND "
+                              "provider_token_id=:tok"),
+                         {"t": tenant_id, "p": m.provider, "tok": m.provider_token_id}).scalar_one_or_none()
+    mid = known or mandate_id_for(tenant_id, m.provider, m.provider_token_id)
     prev = conn.execute(text("SELECT status FROM billing.mandates WHERE tenant_id=:t AND mandate_id=:m"),
                         {"t": tenant_id, "m": mid}).scalar_one_or_none()
     max_minor = m.max_amount.minor if m.max_amount else None

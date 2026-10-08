@@ -184,6 +184,12 @@ def apply_payment(conn: Connection, tenant_id: str, provider: PaymentProvider, p
     base: dict[str, Any] = {"provider": p.provider, "provider_payment_id": p.provider_payment_id,
                             "debit_id": debit_id, "customer_id": customer_id, "amount_minor": p.amount.minor,
                             "currency": p.amount.currency}
+    if debit_id and status in (PaymentStatus.CAPTURED, PaymentStatus.FAILED):   # a mandate charge attempt's outcome
+        conn.execute(text("UPDATE billing.debit_attempts SET status=:s, provider_payment_id=coalesce("
+                          "provider_payment_id, :pp), updated_at=now() WHERE tenant_id=:t AND debit_id=:d AND "
+                          "status='charging' AND (provider_payment_id=:pp OR provider_order_id=:o)"),
+                     {"s": "captured" if status == PaymentStatus.CAPTURED else "failed", "pp": p.provider_payment_id,
+                      "o": p.order_ref, "t": tenant_id, "d": debit_id})
     if status == PaymentStatus.CAPTURED:
         verification = verify_capture(provider, p.provider_payment_id,
                                       Money(due_minor) if due_minor is not None else p.amount)

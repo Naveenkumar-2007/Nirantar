@@ -224,6 +224,29 @@ class RazorpayProvider:
         return CheckoutOrder("razorpay", str(o["id"]), Money(int(o["amount"])), str(o.get("receipt") or receipt),
                              str(o.get("status", "created")))
 
+    def charge_mandate(self, *, token_ref: str, customer_ref: str | None, amount: Money, receipt: str,
+                       notes: Mapping[str, str], contact: str | None = None, email: str | None = None,
+                       at: datetime | None = None) -> ProviderPayment:
+        """Merchant-initiated charge on a mandate: create an order, then a recurring payment on the customer's token
+        (POST /v1/payments/create/recurring). The outcome arrives by webhook (payment.captured / payment.failed);
+        what is returned here is the created payment. The receipt is unique per (debit, attempt)."""
+        if amount.currency != "INR":
+            raise ProviderRejected("razorpay mandate charges are in INR")
+        if not customer_ref:
+            raise ProviderRejected("a Razorpay customer id is required to charge a token")
+        order = self.create_order(amount, receipt, notes)
+        body: dict[str, Any] = {"amount": amount.minor, "currency": "INR", "order_id": order.order_id,
+                                "customer_id": customer_ref, "token": token_ref, "recurring": "1",
+                                "description": "Subscription payment", "notes": dict(notes)}
+        if contact:
+            body["contact"] = contact
+        if email:
+            body["email"] = email
+        r = self._http.request("POST", f"{self._base}/payments/create/recurring", idempotent=False, json=body)
+        return ProviderPayment("razorpay", str(r.get("razorpay_payment_id") or ""), amount, PaymentStatus.CREATED,
+                               None, None, None, at, customer_ref=customer_ref, order_ref=order.order_id,
+                               notes=dict(notes), token_ref=token_ref)
+
     def fetch_order_payments(self, order_id: str) -> list[ProviderPayment]:
         page = self._http.request("GET", f"{self._base}/orders/{order_id}/payments", idempotent=True)
         return [self.to_payment(p) for p in page.get("items", [])]
