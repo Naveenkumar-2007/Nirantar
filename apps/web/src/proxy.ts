@@ -5,7 +5,7 @@ import { REFRESH_COOKIE, SESSION_COOKIE, cookieOptions, seal, unseal, type Sessi
 /** Optimistic auth gate (Next.js Proxy): no session → /login. Near-expiry access token → refresh it here, the one
  * place that can set cookies before Server Components render. Authorization itself is enforced by the API on every
  * call (the token is verified there); this only decides where the browser goes. */
-const PUBLIC = ["/login", "/auth/", "/pay/", "/favicon.ico", "/_next/"];   // /pay: customers, the token is the key
+const PUBLIC = ["/login", "/auth/", "/pay/", "/welcome", "/favicon.ico", "/_next/"];   // /pay: the token is the key
 const REFRESH_MAX_AGE = 60 * 60 * 24;
 
 export async function proxy(request: NextRequest) {
@@ -22,6 +22,7 @@ export async function proxy(request: NextRequest) {
     res.cookies.delete(REFRESH_COOKIE);
     return res;
   };
+  if (!session && pathname === "/") return NextResponse.redirect(new URL("/welcome", request.url));  // visitors
   if (!session) return toLogin();
   if (session.expiresAt - 30 > Date.now() / 1000) return NextResponse.next();
 

@@ -181,6 +181,9 @@ exact cart amount, WhatsApp+promotional consent) → verified recovery-link paym
 Mandate collection (ADR-0029): plans may collect by mandate (active, limit-covering mandate required);
 mandate.charge_debit (retry_sequencer only: ≥24h after notice, ≤3 attempts, debit's own amount, receipt <debit>.a<n>);
 mandates/retry.py plans retries only for BANK_TECHNICAL / INSUFFICIENT_FUNDS, 06:00-09:00 IST; billing.debit_attempts.
+Agents & evals (ADR-0030): the durable workflow per subject is the supervisor; specialists act only via scoped
+gateway tools with an AgentSpec each; `python -m nirantar.evals.agents` scores evals/agents/*.yaml against
+thresholds.yaml (critical gates = 1.0) and tests/evals gates CI.
 Demo (deploy/space, Dockerfile): whole stack in one container on :7860, NIRANTAR_DEMO=1 (mock only, refuses real
 credentials); CI .github/workflows/ci.yml; deploy-huggingface.yml → private Space Naveen-2007/nirantar.
 Live voice (ADR-0026): comms.place_call (Exotel connect-to-flow, voice_call policy incl. registered header), signed

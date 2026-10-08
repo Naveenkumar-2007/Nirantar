@@ -30,7 +30,8 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("IFSC", re.compile(r"\b[A-Z]{4}0[A-Z0-9]{6}\b")),
     ("PHONE", re.compile(r"(?:\+?91[\s-]?)?\b[6-9]\d{4}[\s-]?\d{5}\b")),
     ("ACCOUNT", re.compile(r"\b\d{9,18}\b")),
-    ("OTP", re.compile(r"\b(?:otp|pin|code|cvv)\W{0,3}\d{3,8}\b|\b\d{4,8}\b(?=\W{0,3}(?:otp|pin|is my otp))",
+    ("OTP", re.compile(r"\b(?:otp|pin|code|cvv)(?:\s+(?:is|was|no\.?|number))?\W{0,3}\d{3,8}\b|"
+                       r"\b\d{4,8}\b(?=\W{0,3}(?:otp|pin|is my otp))",
                        re.IGNORECASE)),
 )
 
@@ -50,21 +51,27 @@ _INJECTION: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("override", re.compile(
         r"\b(ignore|disregard|forget|override|bypass)\b.{0,40}\b(previous|prior|above|earlier|all|your|system|the)\b"
         r".{0,30}\b(instructions?|rules?|prompts?|guidelines?|policies|polic(y|ies))\b", re.IGNORECASE | re.DOTALL)),
+    ("override_all", re.compile(r"\b(forget|ignore|disregard)\b.{0,15}\b(everything|all of (it|that))\b.{0,30}"
+                                r"\b(told|said|instructed|before|above|earlier)\b|\bignore (the|everything) above\b|"
+                                r"\b(reply|respond|answer) only with\b", re.IGNORECASE | re.DOTALL)),
     ("new_instructions", re.compile(r"\b(new|updated|real|actual)\s+(instructions?|rules|task)\s*[:\-]", re.I)),
-    ("role_spoof", re.compile(r"(^|\n)\s*(system|assistant|developer|admin|root)\s*[:>]|<\|?(im_start|system|endoftext)"
+    ("role_spoof", re.compile(r"(^|\n)\s*#{1,6}\s*(system|assistant|developer)\b|"
+                              r"(^|\n)\s*(system|assistant|developer|admin|root)\s*[:>]|<\|?(im_start|system|endoftext)"
                               r"\|?>|\[/?(INST|SYS)\]", re.IGNORECASE)),
     ("persona", re.compile(r"\byou are (now|no longer)\b|\bact as\b|\bpretend (to be|you are)\b|\bjailbreak\b|"
                            r"\bDAN\b|developer mode", re.IGNORECASE)),
     ("tool_bait", re.compile(r"\b(call|invoke|use|run|execute)\b.{0,20}\b(tool|function|api|refund|payout|transfer|"
-                             r"waive|discount|write[ -]?off)\b|\"?(function_call|tool_calls?)\"?\s*:", re.IGNORECASE)),
+                             r"waive|discount|write[ -]?off)\b|\"?(function_call|tool_calls?)\"?\s*:|"
+                             r"\"(tool|name|function)\"\s*:\s*\"[a-z_]+\.[a-z_]+\"", re.IGNORECASE)),
     ("exfiltrate", re.compile(r"\b(reveal|print|show|repeat|leak|send)\b.{0,30}\b(system prompt|instructions|api key|"
                               r"secret|token|password|other customers?)\b", re.IGNORECASE)),
     ("fence_escape", re.compile(r"</?\s*(untrusted|data|document|context)[^>]*>|```\s*(system|end)|"
                                 r"END OF (DATA|DOCUMENT|UNTRUSTED)", re.IGNORECASE)),
-    ("hinglish", re.compile(r"\b(pichl[ae]|purane|saare)\s+(instructions?|niyam|rules)\s+(bhool|ignore|chhod)|"
+    ("hinglish", re.compile(r"\b(pichl[ae]|purane|saare|sabhi|pehle(\s+wale)?)\s+(\w+\s+)?(instructions?|niyam|"
+                            r"rules)\s+(bhool|ignore|chhod)|"
                             r"\b(niyam|instructions?)\s+(bhool\s*jao|ignore\s*karo|mat\s*mano)", re.IGNORECASE)),
     ("hindi", re.compile(r"(पिछले|सारे|सभी)\s*(निर्देश|नियम)\s*(भूल|अनदेखा)|निर्देशों\s*को\s*(भूल|अनदेखा)")),
-    ("telugu", re.compile(r"(ముందు|అన్ని)\s*(సూచనలు|నియమాలు)\s*(మర్చిపో|పట్టించుకోవద్దు)")),
+    ("telugu", re.compile(r"(ముందు|అన్ని|మునుపటి)\s*(సూచనలు|నియమాలు)\s*(మర్చిపో|పట్టించుకోవద్దు)")),
 )
 _HIDDEN = re.compile("[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\U000e0000-\U000e007f]")
 

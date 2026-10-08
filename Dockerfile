@@ -44,10 +44,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
     && apt-get purge -y gnupg && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
-COPY --from=redpandadata/redpanda:v24.2.7 /opt/redpanda /opt/redpanda
-COPY --from=temporalio/admin-tools:1.25.2-tctl-1.18.1-cli-1.1.1 /usr/local/bin/temporal /usr/local/bin/temporal
-COPY --from=caddy:2.8 /usr/bin/caddy /usr/local/bin/caddy
-COPY --from=chrislusf/seaweedfs:3.97 /usr/bin/weed /usr/local/bin/weed
+COPY --from=redpandadata/redpanda:v26.2.4 /opt/redpanda /opt/redpanda
+# the broker runs libexec/redpanda directly; the rpk CLI (Go) is not needed and only adds attack surface
+RUN rm -f /opt/redpanda/libexec/rpk /opt/redpanda/bin/rpk
+COPY --from=temporalio/temporal:1.9.1 /usr/local/bin/temporal /usr/local/bin/temporal
+COPY --from=caddy:2.11.7 /usr/bin/caddy /usr/local/bin/caddy
 
 # Hugging Face runs the container as uid 1000; everything it writes lives under /home/user.
 RUN useradd --create-home --uid 1000 user

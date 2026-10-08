@@ -17,7 +17,7 @@ Production runs on a VPS with `deploy/compose.prod.yml`; see `deploy/README.md`.
 
 1. Creates a fresh data directory and random per-start secrets (database passwords, API key pepper, signing keys,
    data encryption key).
-2. Starts Postgres 16 with pgvector and the RLS roles, Redis, Redpanda, the SeaweedFS object store and the Temporal
+2. Starts Postgres 16 with pgvector and the RLS roles, Redis, Redpanda and the Temporal
    dev server.
 3. Runs `alembic upgrade head`.
 4. Seeds "Chai Club (demo)" through the real pipeline (`nirantar.demo.seed`).

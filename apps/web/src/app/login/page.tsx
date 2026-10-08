@@ -1,3 +1,6 @@
+import Link from "next/link";
+import { Wordmark } from "@/components/brand";
+
 const ERRORS: Record<string, string> = {
   expired: "That sign-in took too long. Please try again.",
   signin_failed: "We couldn't complete your sign-in. Please try again.",
@@ -12,7 +15,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
     <div className="grid min-h-screen place-items-center px-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <div className="text-2xl font-semibold tracking-tight">Nirantar</div>
+          <Link href="/welcome" className="inline-flex"><Wordmark className="text-2xl" /></Link>
           <p className="mt-1 text-sm text-muted-foreground">Keep recurring revenue flowing — and prove what worked.</p>
         </div>
         <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
@@ -28,7 +31,8 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
             Create an account
           </a>
           <p className="mt-4 text-center text-xs text-muted-foreground">
-            Sign-in is handled by Nirantar&apos;s identity service. We never see your password.
+            Sign-in, password reset and two-step verification are handled by Nirantar&apos;s identity service.
+            We never see your password.
           </p>
         </div>
       </div>

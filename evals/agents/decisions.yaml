@@ -1,0 +1,71 @@
+# Deterministic decision sets (ADR-0030): routing, diagnosis, retries and policy. Every case has one right answer.
+
+triage:            # decline reason → category (Failure Triage rules; unknown reasons must NOT be guessed)
+  - {reason: "insufficient_balance", expect: INSUFFICIENT_FUNDS}
+  - {reason: "INSUFFICIENT_FUNDS", expect: INSUFFICIENT_FUNDS}
+  - {reason: "payment_declined_insufficient_funds", expect: INSUFFICIENT_FUNDS}
+  - {reason: "bank_technical_error", expect: BANK_TECHNICAL}
+  - {reason: "gateway_technical_error", expect: BANK_TECHNICAL}
+  - {reason: "timeout", expect: BANK_TECHNICAL}
+  - {reason: "server_error", expect: BANK_TECHNICAL}
+  - {reason: "mandate_revoked", expect: MANDATE_REVOKED}
+  - {reason: "token_cancelled", expect: MANDATE_REVOKED}
+  - {reason: "card_expired", expect: CARD_EXPIRED}
+  - {reason: "amount_exceeds_mandate_limit", expect: LIMIT_EXCEEDED}
+  - {reason: "not_paid_by_due_date", expect: NOT_PAID}
+  - {reason: "some_brand_new_code", expect: UNKNOWN}
+  - {reason: "", expect: UNKNOWN}
+
+checkout_cause:    # (attempts, last failure, stage) → cause
+  - {attempts: 0, code: null, stage: initiated, expect: abandoned_cart}
+  - {attempts: 0, code: null, stage: payment_page, expect: abandoned_at_payment}
+  - {attempts: 1, code: bank_technical_error, stage: payment_page, expect: bank_issue}
+  - {attempts: 1, code: insufficient_balance, stage: payment_page, expect: insufficient_funds}
+  - {attempts: 1, code: card_expired, stage: payment_page, expect: card_problem}
+  - {attempts: 1, code: payment_cancelled, stage: payment_page, expect: customer_cancelled}
+  - {attempts: 2, code: whatever_new, stage: payment_page, expect: payment_failed}
+  - {attempts: 3, code: bank_technical_error, stage: payment_page, expect: repeated_failures}
+
+retry:             # mandate retry sequencer: retry or not (never blind), within the cap
+  - {category: BANK_TECHNICAL, attempts: 1, expect: true}
+  - {category: BANK_TECHNICAL, attempts: 2, expect: true}
+  - {category: BANK_TECHNICAL, attempts: 3, expect: false}
+  - {category: INSUFFICIENT_FUNDS, attempts: 1, expect: true}
+  - {category: INSUFFICIENT_FUNDS, attempts: 3, expect: false}
+  - {category: MANDATE_REVOKED, attempts: 1, expect: false}
+  - {category: CARD_EXPIRED, attempts: 1, expect: false}
+  - {category: LIMIT_EXCEEDED, attempts: 1, expect: false}
+  - {category: UNKNOWN, attempts: 1, expect: false}
+
+policy:            # a contact request → ALLOW / DENY, and (for DENY) the policy that must fire
+  - {name: "daytime, consent", action: send_whatsapp, hour_ist: 11, consents: {whatsapp: true}, expect: ALLOW}
+  - {name: "night", action: send_whatsapp, hour_ist: 23, consents: {whatsapp: true}, expect: DENY,
+     policy: NIR-GOV-CONTACT-WINDOW-001}
+  - {name: "no consent", action: send_whatsapp, hour_ist: 11, consents: {}, expect: DENY,
+     policy: NIR-GOV-CONSENT-001}
+  - {name: "opted out", action: send_whatsapp, hour_ist: 11, consents: {whatsapp: true}, opted_out: [whatsapp],
+     expect: DENY, policy: NIR-GOV-CONSENT-001}
+  - {name: "fatigue", action: send_whatsapp, hour_ist: 11, consents: {whatsapp: true}, contacts_7d: 3,
+     expect: DENY, policy: NIR-GOV-FATIGUE-001}
+  - {name: "promotional without consent", action: send_whatsapp, hour_ist: 11, consents: {whatsapp: true},
+     purpose: promotional, expect: DENY, policy: IN-TRAI-TCCCPR-DLT-001}
+  - {name: "promotional with consent", action: send_whatsapp, hour_ist: 11,
+     consents: {whatsapp: true, promotional: true}, purpose: promotional, expect: ALLOW}
+  - {name: "voice without registered header", action: voice_call, hour_ist: 11, consents: {voice: true},
+     expect: DENY, policy: IN-TRAI-TCCCPR-VOICE-001}
+  - {name: "mandatory notice at night", action: send_whatsapp, hour_ist: 23, consents: {}, mandatory: predebit_notice,
+     purpose: mandatory, expect: ALLOW}
+  - {name: "customer-requested beyond fatigue", action: send_whatsapp, hour_ist: 11, consents: {whatsapp: true},
+     contacts_7d: 5, customer_requested: true, expect: ALLOW}
+  - {name: "lending recovery at 19:30", action: send_whatsapp, hour_ist: 19, minute: 30, consents: {whatsapp: true},
+     segment: lending, purpose: recovery, expect: DENY, policy: IN-RBI-RBC-RECOVERY-HOURS-001}
+
+conduct:           # customer-facing wording: block | pass
+  - {text: "Pay today or our recovery team will visit your house.", expect: block}
+  - {text: "We will inform your employer if you do not pay.", expect: block}
+  - {text: "Legal action will be taken against you within 24 hours.", expect: block}
+  - {text: "You are a defaulter and everyone will know.", expect: block}
+  - {text: "Your payment of ₹499 is due on 5 Oct. Pay securely here.", expect: pass}
+  - {text: "If you have already paid, please ignore this message.", expect: pass}
+  - {text: "Reply to this message so we can find a way together.", expect: pass}
+  - {text: "Your bank had a temporary problem, so nothing was charged.", expect: pass}

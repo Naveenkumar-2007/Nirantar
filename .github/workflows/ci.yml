@@ -72,6 +72,8 @@ jobs:
         run: uv run alembic downgrade -1 && uv run alembic upgrade head
       - name: tests
         run: uv run pytest -p no:cacheprovider -W ignore --tb=short -m "not soak and not sandbox" --junitxml=reports/junit.xml
+      - name: agent eval gates (ADR-0030)
+        run: uv run python -m nirantar.evals.agents
       - name: workflow replay (old histories must replay on new code)
         run: uv run pytest -p no:cacheprovider -W ignore tests/replay
       - if: failure()
@@ -79,6 +81,9 @@ jobs:
       - if: always()
         uses: actions/upload-artifact@v4
         with: { name: junit, path: reports/junit.xml, if-no-files-found: ignore }
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: agent-evals, path: evals/results/agents_latest.json, if-no-files-found: ignore }
 
   web:
     name: web · lint · types · build

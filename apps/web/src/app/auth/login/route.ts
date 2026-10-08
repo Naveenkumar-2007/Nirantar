@@ -19,6 +19,10 @@ export async function GET(request: NextRequest) {
     nonce,
   };
   if (request.nextUrl.searchParams.get("signup") === "1") params.prompt = "create";   // Keycloak registration page
+  // account actions run by the identity service itself (allow-listed: nothing else can be requested this way)
+  const action = request.nextUrl.searchParams.get("action");
+  if (action === "mfa") params.kc_action = "CONFIGURE_TOTP";             // two-step verification (authenticator app)
+  if (action === "password") params.kc_action = "UPDATE_PASSWORD";
   const res = NextResponse.redirect(client.buildAuthorizationUrl(cfg, params));
   res.cookies.set(FLOW_COOKIE, await seal({ state, nonce, verifier, returnTo }, 600), cookieOptions(600));
   return res;

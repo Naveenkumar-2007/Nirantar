@@ -203,6 +203,8 @@ templates:
     te: "నమస్తే {name}, మీ {plan} UPI ఆటో-పే నిలిపివేయబడింది. తదుపరి చెల్లింపు జరగాలంటే దయచేసి {date} లోపు మీ UPI యాప్‌లో దాన్ని మళ్ళీ ప్రారంభించండి."
   sms.predebit_notice:
     en: "Reminder: {amount} will be debited on {date} for your {plan}. Reply STOP to manage your mandate."
+    hi: "सूचना: आपके {plan} के लिए {date} को {amount} डेबिट होंगे। मैंडेट प्रबंधित करने के लिए STOP लिखें।"
+    te: "గమనిక: మీ {plan} కోసం {date} న {amount} డెబిట్ అవుతుంది. మాండేట్ నిర్వహించడానికి STOP అని పంపండి."
   voice.greeting:
     en: "Hello, this is an automated call from {merchant} about your subscription payment of {amount}. This call may be recorded. Would you like us to send a secure payment link?"
     hi: "नमस्ते, यह {merchant} की ओर से आपके {amount} के सब्सक्रिप्शन भुगतान के बारे में एक स्वचालित कॉल है। यह कॉल रिकॉर्ड की जा सकती है। क्या हम आपको सुरक्षित भुगतान लिंक भेजें?"

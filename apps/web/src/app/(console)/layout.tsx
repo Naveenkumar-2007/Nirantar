@@ -3,6 +3,7 @@ import { api } from "@/lib/api";
 import { getSession } from "@/lib/auth";
 import { switchBusiness } from "@/lib/business-actions";
 import { AppSidebar } from "@/components/app-sidebar";
+import { CommandMenu } from "@/components/command-menu";
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 
@@ -20,13 +21,14 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
     <SidebarProvider defaultOpen={open}>
       <AppSidebar user={session ? { name: session.name, email: session.email } : null} businesses={businesses}
         current={current} switchAction={switchBusiness} demo={demo} />
-      <SidebarInset>
+      <SidebarInset className="min-w-0">
         <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 rounded-t-xl border-b border-border bg-background/80 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
           <span className="truncate text-sm text-muted-foreground">{current?.name ?? "Nirantar"}</span>
+          <CommandMenu />
           {demo && (
-            <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 text-xs text-muted-foreground"
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 text-xs text-muted-foreground"
               title="Synthetic business. Mock payments; no WhatsApp message or call is ever sent. Resets on restart.">
               <span aria-hidden className="size-1.5 rounded-full bg-amber-500" />
               Demo · synthetic data · nothing is sent

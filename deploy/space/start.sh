@@ -37,7 +37,7 @@ export RELAY_DATABASE_URL="$DATABASE_OWNER_URL"
 export REDIS_URL="redis://127.0.0.1:6379/0"
 export KAFKA_BOOTSTRAP="127.0.0.1:19092"
 export TEMPORAL_ADDRESS="127.0.0.1:7233"
-export S3_ENDPOINT="http://127.0.0.1:8333" NIRANTAR_S3_ENDPOINT="http://127.0.0.1:8333"
+# no object store in the demo: evidence files (dispute packs, call recordings) are not part of the showcase
 PUBLIC_URL="https://${SPACE_HOST:-localhost:7860}"
 [ -z "${SPACE_HOST:-}" ] && PUBLIC_URL="http://localhost:7860"
 export NIRANTAR_PUBLIC_APP_URL="$PUBLIC_URL" CORS_ORIGINS="$PUBLIC_URL"
@@ -74,18 +74,14 @@ redpanda --redpanda-cfg "$DATA/redpanda/redpanda.yaml" --smp 1 --memory 1G --res
   --overprovisioned --unsafe-bypass-fsync=true --default-log-level=warn > "$DATA/redpanda.log" 2>&1 &
 PIDS+=($!)
 
-weed server -dir="$DATA/s3" -ip=127.0.0.1 -ip.bind=127.0.0.1 -s3 -s3.port=8333 -volume.max=4 \
-  -master.volumeSizeLimitMB=256 > "$DATA/s3.log" 2>&1 &
-PIDS+=($!)
 
 temporal server start-dev --ip 127.0.0.1 --port 7233 --headless --db-filename "$DATA/temporal.db" \
   --log-level warn > "$DATA/temporal.log" 2>&1 &
 PIDS+=($!)
 
 wait_for redis 30 redis-cli -h 127.0.0.1 ping
-wait_for redpanda 120 sh -c 'rpk cluster health -X brokers=127.0.0.1:19092 -X admin.hosts=127.0.0.1:9644 | grep -q "Healthy:.*true"'
+wait_for redpanda 120 python -c 'from confluent_kafka.admin import AdminClient as A; A({"bootstrap.servers": "127.0.0.1:19092"}).list_topics(timeout=3)'
 wait_for temporal 120 temporal operator cluster health --address 127.0.0.1:7233
-wait_for objectstore 60 curl -fsS -o /dev/null http://127.0.0.1:8333/status
 
 # ---------------------------------------------------------------- schema + one synthetic business
 cd "$APP"

@@ -75,7 +75,9 @@ def test_debit_strategist_is_deterministic_and_conservative() -> None:
 
 
 def test_every_agent_has_a_complete_spec() -> None:
-    assert len(SPECS) == 13
+    from nirantar.mcp.tools import AGENT_SCOPES
+
+    assert set(AGENT_SCOPES) <= set(SPECS), "every agent that can call tools has a reviewed spec"
     for s in SPECS.values():
         assert s.fallback and s.escalates_when and s.status in ("implemented", "planned")
 

@@ -148,6 +148,8 @@ _CONDUCT_RULES = [(label, re.compile(p, re.IGNORECASE)) for label, p in (
     ("threat to involve family/employer/others",
      r"\b(inform|tell|call|contact)\b.*\b(family|relatives?|friends?|employer|neighbou?rs?|colleagues?)\b"),
     ("shaming", r"\bshame\b"), ("blacklisting threat", r"\bblacklist"),
+    ("labelling or public shaming", r"\bdefaulters?\b|\beveryone will (know|see|find out)\b|"
+                                    r"\b(publish|post|announce)\b.{0,30}\b(name|photo|details)\b"),
     ("credit-score threat", r"\bcibil\b.*\bruin"),
     # RBI fair practices: no intimidation, visit threats, seizure threats or humiliation (red team, ADR-0027)
     ("threat of a visit by agents",

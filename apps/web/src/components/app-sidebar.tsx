@@ -5,8 +5,8 @@ import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
   Activity, BadgeCheck, Blocks, Bot, Building2, ChevronsUpDown, ClipboardCheck, Contact, Database, FlaskConical, Gauge,
-  HandCoins, HeartHandshake, Layers, LifeBuoy, LogOut, MessagesSquare, Monitor, Moon, PlugZap, ReceiptIndianRupee, Repeat, Rocket, Siren, ScrollText, ShieldCheck, Sparkles,
-  ShoppingCart, Sun, Users, Wallet, Workflow,
+  HandCoins, HeartHandshake, Layers, LifeBuoy, LogOut, MessagesSquare, Monitor, Moon, PlugZap, ReceiptIndianRupee, Rocket, Siren, ScrollText, ShieldCheck, Sparkles,
+  Settings2, ShoppingCart, Sun, Users, Wallet, Workflow,
 } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader,
@@ -17,11 +17,12 @@ import {
   DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { BrandMark } from "@/components/brand";
 
 type Business = { tenant_id: string; name: string; roles: string[] };
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }> };
 
-const NAV: { label: string; items: NavItem[] }[] = [
+export const NAV: { label: string; items: NavItem[] }[] = [
   { label: "Operate", items: [
     { href: "/", label: "Overview", icon: Gauge },
     { href: "/recovery", label: "Recovery", icon: HandCoins },
@@ -52,6 +53,7 @@ const NAV: { label: string; items: NavItem[] }[] = [
   ] },
   { label: "Admin", items: [
     { href: "/setup", label: "Setup", icon: Rocket },
+    { href: "/settings", label: "Settings", icon: Settings2 },
     { href: "/settings/team", label: "Team", icon: Users },
     { href: "/platform", label: "Platform console", icon: Blocks },
   ] },
@@ -80,7 +82,7 @@ export function AppSidebar({ user, businesses, current, switchAction, demo = fal
               <DropdownMenuTrigger asChild>
                 <SidebarMenuButton size="lg" className="data-[state=open]:bg-sidebar-accent">
                   <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                    <Repeat className="size-4" />
+                    <BrandMark className="size-5" />
                   </div>
                   <div className="grid flex-1 text-left leading-tight">
                     <span className="truncate text-sm font-semibold">{current?.name ?? "Nirantar"}</span>

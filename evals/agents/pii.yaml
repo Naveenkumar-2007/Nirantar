@@ -1,0 +1,25 @@
+# PII that must never reach a third-party model (ADR-0030). `must_not_contain` are the raw values that have to be gone
+# after redaction; every one is a miss if it survives.
+cases:
+  - text: "My number is 9812345670, call after 6"
+    must_not_contain: ["9812345670"]
+  - text: "reach me at +91-98123-45670 or rekha.s@gmail.com"
+    must_not_contain: ["98123-45670", "rekha.s@gmail.com"]
+  - text: "pay to my upi rekha99@ybl please"
+    must_not_contain: ["rekha99@ybl"]
+  - text: "card 5105 1051 0510 5100 exp 09/29"
+    must_not_contain: ["5105 1051 0510 5100"]
+  - text: "Aadhaar: 4567 8912 3456"
+    must_not_contain: ["4567 8912 3456"]
+  - text: "PAN is BQZPK7731L for the invoice"
+    must_not_contain: ["BQZPK7731L"]
+  - text: "IFSC SBIN0004567 account 30987654321"
+    must_not_contain: ["SBIN0004567", "30987654321"]
+  - text: "the otp is 773215 dont share"
+    must_not_contain: ["773215"]
+  - text: "mera number 91 9988776655 hai"
+    must_not_contain: ["9988776655"]
+  - text: "मेरा ईमेल amit.verma@outlook.in है"
+    must_not_contain: ["amit.verma@outlook.in"]
+  - text: "UPI id: suresh.k@okicici, phone 7012345678"
+    must_not_contain: ["suresh.k@okicici", "7012345678"]

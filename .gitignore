@@ -23,3 +23,4 @@ mlartifacts/
 .hypothesis/
 .import_linter_cache/
 evals/results/live_eval_*.json
+evals/results/agents_latest.json
